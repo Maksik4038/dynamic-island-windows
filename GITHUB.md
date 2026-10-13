@@ -1,65 +1,115 @@
-# Как выложить проект на GitHub
+# Работа с репозиторием
 
-Git на этом компьютере не установлен, поэтому команды ниже нужно выполнить самому.
-Проект уже подготовлен: есть `.gitignore`, `README.md`, `LICENSE` и `Build.ps1`.
+Проект опубликован: **<https://github.com/Maksik4038/dynamic-island-windows>**
 
----
-
-## Шаг 1. Установить Git
-
-Скачать и установить: <https://git-scm.com/download/win>
-
-Параметры установки можно оставить по умолчанию. После установки **закрыть и заново
-открыть** PowerShell, иначе команда `git` не появится.
-
-Проверка:
-
-```powershell
-git --version
-```
-
-Должно вывести что-то вроде `git version 2.47.0.windows.1`.
-
-Заодно представиться (это попадёт в историю коммитов):
-
-```powershell
-git config --global user.name "Ваше Имя"
-git config --global user.email "ваш@email.com"
-```
+Репозиторий уже настроен — ветка `main` отслеживает `origin`, авторизация Git Credential
+Manager сохранена. Для повседневной работы достаточно трёх команд.
 
 ---
 
-## Шаг 2. Создать репозиторий на GitHub
-
-1. Открыть <https://github.com/new>
-2. **Repository name**: например `dynamic-island-windows`
-3. Поставить **Public** (или Private, если хотите скрыть)
-4. **Не** ставить галочки «Add a README file», «Add .gitignore», «Choose a license» —
-   всё это уже есть в проекте, иначе будет конфликт
-5. Нажать **Create repository**
-
-GitHub покажет страницу с командами. Нужен адрес вида
-`https://github.com/ВАШ_ЛОГИН/dynamic-island-windows.git`.
-
----
-
-## Шаг 3. Создать локальный репозиторий и закоммитить
-
-Выполнить по порядку (замените путь, если папка лежит в другом месте):
+## Как внести изменения
 
 ```powershell
 cd "C:\Users\Arch\Documents\deepseek-harness\default-workspace\DynamicIsland"
 
-git init
 git add .
-git status              # проверить, что попадает в коммит
-git commit -m "Dynamic Island for Windows 11: layered-window pill with live activities"
+git commit -m "кратко что изменилось"
+git push
 ```
 
-Обратите внимание на `git status`: в списке **не должно быть** `DynamicIsland.exe`,
-`settings.ini` и `island-status.txt` — они исключены через `.gitignore`.
+Проверить, что изменилось, до коммита:
 
-Если exe всё-таки попал в список (например, был добавлен раньше), убрать из индекса:
+```powershell
+git status
+git diff
+```
+
+---
+
+## Если нужно выложить проект с нуля (на другой машине)
+
+### 1. Установить Git
+
+<https://git-scm.com/download/win> — после установки **закрыть и заново открыть**
+PowerShell, иначе команда `git` не появится.
+
+```powershell
+git --version
+git config --global user.name "Maksik4038"
+git config --global user.email "maksikk246@gmail.com"
+```
+
+Имя и почта важны: по ним GitHub связывает коммиты с аккаунтом. Если оставить
+заполнитель вроде `Ваше Имя`, автор коммита будет выглядеть как чужой человек.
+
+### 2. Создать репозиторий на GitHub
+
+<https://github.com/new> → имя `dynamic-island-windows`.
+
+**Не ставить** галочки «Add a README file», «Add .gitignore», «Choose a license» —
+всё это уже есть в проекте, иначе получится конфликт при первом `push`.
+
+### 3. Отправить
+
+```powershell
+cd <папка с проектом>
+git init
+git add .
+git status                 # exe, settings.ini и island-status.txt быть не должно
+git commit -m "Dynamic Island for Windows 11: layered-window pill with live activities"
+git branch -M main
+git remote add origin https://github.com/Maksik4038/dynamic-island-windows.git
+git push -u origin main
+```
+
+---
+
+## Ошибки, которые уже случались
+
+**`Repository not found` при push.** Самая частая причина — в адресе остался
+заполнитель. Проверить и исправить:
+
+```powershell
+git remote -v
+git remote set-url origin https://github.com/Maksik4038/dynamic-island-windows.git
+```
+
+Git **не умеет создавать репозитории на GitHub**. Если репозитория ещё нет, push
+всегда вернёт `Repository not found`, даже когда адрес правильный.
+
+**`error: remote origin already exists`.** Удалённый репозиторий уже прописан, повторно
+`git remote add` не сработает. Используйте `git remote set-url` (см. выше).
+
+**`nothing to commit, working tree clean`.** Все изменения уже закоммичены — это не
+ошибка. Либо коммит уже сделан, либо файлы не попали в индекс (`git add .`).
+
+**Автор коммита — не вы.** Поправить последний коммит, не меняя файлы:
+
+```powershell
+git config user.name "Maksik4038"
+git commit --amend --reset-author --no-edit
+git push --force-with-lease
+```
+
+Почта `maksikk246@gmail.com` в настройках — рабочая: она привязана к аккаунту
+`Maksik4038`, поэтому GitHub связывает коммиты с профилем. Менять не нужно.
+
+---
+
+## Что не попадает в репозиторий
+
+`.gitignore` исключает:
+
+| Исключено | Почему |
+|---|---|
+| `DynamicIsland.exe` | собирается командой `Build.ps1` |
+| `settings.ini` | личные настройки (ширина острова) |
+| `island-status.txt` | рабочий файл, создаётся при запуске |
+| `bin/`, `obj/`, `*.pdb` | артефакты сборки |
+
+Снимки из `shots/` **остаются** — они используются в README как иллюстрации.
+
+Если exe уже попал в индекс:
 
 ```powershell
 git rm --cached DynamicIsland.exe
@@ -67,70 +117,22 @@ git rm --cached DynamicIsland.exe
 
 ---
 
-## Шаг 4. Загрузить на GitHub
+## Отдельный проект: HTML-плеер
 
-```powershell
-git branch -M main
-git remote add origin https://github.com/ВАШ_ЛОГИН/dynamic-island-windows.git
-git push -u origin main
-```
+В папке выше лежит `liquid-glass-player.html` — музыкальный плеер в стиле liquid glass.
+Варианты:
 
-При первом `push` откроется окно входа в GitHub — нужно авторизоваться.
-Пароль от аккаунта **не подойдёт**, нужен Personal Access Token:
-<https://github.com/settings/tokens> → *Generate new token (classic)* → галочка `repo`.
-
-Проще: установить GitHub CLI и войти через браузер — тогда токен не нужен:
-
-```powershell
-winget install --id GitHub.cli
-gh auth login
-```
-
----
-
-## Дальнейшие изменения
-
-После правок в файлах:
-
-```powershell
-git add .
-git commit -m "кратко что изменилось"
-git push
-```
-
----
-
-## Что уже исключено из репозитория
-
-Файл `.gitignore` не даёт попасть в коммит:
-
-| Исключено | Почему |
-|---|---|
-| `DynamicIsland.exe` | собирается из исходников командой `Build.ps1` |
-| `settings.ini` | личные настройки (ширина острова) |
-| `island-status.txt` | рабочий файл, создаётся во время работы |
-| `bin/`, `obj/`, `*.pdb` | артефакты сборки |
-
-Снимки из `shots/` **остаются** — они используются в README как иллюстрации.
-
----
-
-## Если хотите выложить заодно HTML-плеер
-
-В папке выше лежит `liquid-glass-player.html` (отдельный проект — музыкальный плеер
-в стиле liquid glass). Можно сделать один репозиторий с двумя папками:
+- **отдельный репозиторий** — просто повторить шаги выше в его папке;
+- **вместе с островом** — инициализировать репозиторий на уровень выше и разложить так:
 
 ```
 dynamic-island-windows/
-├── README.md          # общий, с описанием обоих проектов
+├── README.md          # общий, про оба проекта
 ├── LICENSE
 ├── DynamicIsland/     # остров
 └── LiquidGlassPlayer/
-    └── index.html     # плеер (переименованный liquid-glass-player.html)
+    └── index.html
 ```
 
-Тогда инициализировать репозиторий нужно на уровень выше — в
-`C:\Users\Arch\Documents\deepseek-harness\default-workspace`.
-
-Чтобы GitHub Pages отдавал плеер как страницу, положите его как `index.html`
-в корень репозитория и включите *Settings → Pages → Deploy from branch → main / root*.
+Чтобы GitHub Pages отдавал плеер как страницу, положите его как `index.html` в корень
+репозитория и включите *Settings → Pages → Deploy from branch → main / root*.
