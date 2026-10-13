@@ -1,0 +1,18 @@
+# ---- build output ----
+*.exe
+*.pdb
+bin/
+obj/
+
+# ---- runtime state written next to the exe ----
+settings.ini
+island-status.txt
+
+# ---- compiler / editor ----
+.vs/
+*.user
+*.suo
+
+# ---- OS noise ----
+Thumbs.db
+desktop.ini
