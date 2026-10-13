@@ -202,6 +202,77 @@ powershell -ExecutionPolicy Bypass -File Diagnose.ps1
 исключение не показывало ни окна, ни вывода в консоль. Теперь любая фатальная ошибка
 попадает в окно сообщения и в `island-error.log` рядом с exe.
 
+## If Windows refuses to run it
+
+A downloaded executable with no publisher signature can be stopped by Windows
+security. The message usually says the publisher is unknown.
+
+Run the checker and it will say which protection is responsible:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File CheckBlocked.ps1
+```
+
+| What section 1 of the report says | What it means | What to do |
+|---|---|---|
+| `[ OK ] OFF` | Smart App Control is not the problem | look at sections 3 and 4 of the report |
+| `[BLOCK] ON in enforcing mode` | **Smart App Control** blocks every unsigned program. There is no per-app exception | build from source, or turn Smart App Control off (see below) |
+| `[ ? ] ON in evaluation mode` | it blocks only what it considers unsafe | `Unblock-File .\DynamicIsland.exe` and try again |
+
+**Building from source is the recommended workaround.** Windows treats freshly
+compiled code far more leniently than a file downloaded from the internet, and it
+needs no administrator rights:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Build.ps1
+```
+
+**Turning Smart App Control off** also works, but read the warning: Windows does
+not let you turn it back on without reinstalling the system.
+
+*Settings → Privacy and security → Windows Security → App and browser control →
+Smart App Control.*
+
+The only way to ship one file that starts silently for everyone is to **sign it with
+a publisher certificate**. That costs money and requires an identity check; a
+self-signed certificate does not help, because nothing trusts it by default.
+
+## Если Windows не даёт запустить
+
+Скачанный exe без подписи издателя может быть остановлен защитой Windows.
+Обычно сообщение говорит, что издатель неизвестен.
+
+Запустите проверку — она скажет, какая именно защита мешает:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File CheckBlocked.ps1
+```
+
+| Что в пункте 1 отчёта | Что это значит | Что делать |
+|---|---|---|
+| `[ OK ] OFF` | дело не в «Интеллектуальном управлении» | смотрите пункты 3 и 4 отчёта |
+| `[BLOCK] ON in enforcing mode` | **Интеллектуальное управление** блокирует любую неподписанную программу, исключений для отдельных приложений нет | собрать из исходников или выключить защиту (см. ниже) |
+| `[ ? ] ON in evaluation mode` | блокирует только то, что считает опасным | `Unblock-File .\DynamicIsland.exe` и повторить запуск |
+
+**Сборка из исходников — рекомендуемый обход.** Windows относится к только что
+собранному коду намного мягче, чем к скачанному из интернета, и это не требует
+прав администратора:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Build.ps1
+```
+
+**Выключение «Интеллектуального управления»** тоже помогает, но прочтите
+предупреждение: обратно включить его нельзя без переустановки системы.
+
+*Параметры → Конфиденциальность и защита → Безопасность Windows → Управление
+приложениями и браузером → Интеллектуальное управление.*
+
+Единственный способ поставлять один файл, который запускается у всех без
+предупреждений — **подписать его сертификатом издателя**. Это стоит денег и
+требует проверки личности; самоподписанный сертификат не поможет, потому что
+ему по умолчанию никто не доверяет.
+
 ## Honest limitations
 
 These are real restrictions of the platform, not unfinished work:

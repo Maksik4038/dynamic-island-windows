@@ -38,6 +38,7 @@ $files = @(
     'LICENSE',
     'Install.ps1',
     'Diagnose.ps1',
+    'CheckBlocked.ps1',
     'Run.cmd',
     'Build.ps1'
 )
