@@ -490,6 +490,8 @@ namespace DynamicIsland
         private const int DownloadW = 230;            // download bar with the file name
         private const int AppLaunchW = 120;           // app launch: just a big icon
         private const int CardAppH = 120;
+        private const int ChargePillW = 92;           // bolt + percentage
+        private const int ChargeBadgeW = 30;          // the detached badge
 
         // ---- the microphone accent, matching the reference look ----
         private static readonly Color MicInk = Color.FromArgb(255, 242, 158, 24);       // icon glyph
@@ -513,6 +515,8 @@ namespace DynamicIsland
         private int brightness = -1;
         private int battery = -1;
         private bool charging;
+        private string chargeText = "";      // "85%" while charging, empty when unknown
+        private double chgX, chgW;           // detached charging badge, on the right
         private string dateText = "";
         private DateTime lastSlowPoll = DateTime.MinValue;
         private DateTime lastVolumePush = DateTime.MinValue;
@@ -650,6 +654,13 @@ namespace DynamicIsland
             animH = TargetHeight(a);
             velW = velH = 0;
             expanded = false; open = 0; hud = 0; hudMode = false;
+        }
+
+        /// <summary>Snapshot helper: pretend the battery is charging.</summary>
+        public void PoseChargeOnly(bool on, string text)
+        {
+            charging = on;
+            chargeText = text;
         }
 
         /// <summary>Snapshot helper: pretend the workstation is locked.</summary>
@@ -1187,6 +1198,17 @@ namespace DynamicIsland
                 if (locked != was && host != null) host.NeedFrame();
             }
 
+            // charging badge: the text feeds the pill, the flag decides whether the badge
+            // rides inside the island or gets its own small island on the right
+            charging = false;
+            chargeText = "";
+            Activity ch = activities == null ? null : activities.Charging;
+            if (ch != null)
+            {
+                charging = true;
+                chargeText = ch.GotBytes < 0 ? "" : ch.GotBytes + "%";
+            }
+
             double mediaInterval = media.Playing ? 1200 : 3000;
             if ((DateTime.Now - lastMediaPoll).TotalMilliseconds > mediaInterval)
             { lastMediaPoll = DateTime.Now; PollMedia(); }
@@ -1261,7 +1283,11 @@ namespace DynamicIsland
             // when the microphone dot is detached it sits to the LEFT of the pill, so the
             // pill shifts right and the whole pair stays centred on the screen
             // room on the left for the detached microphone island, whatever is showing
-            double groupPad = (dotShown && (media.HasTrack || shown != null)) ? (GapW + MicIslandW + 4) * scale : 0;
+            // room on the left for the detached microphone and on the right for the
+            // charging badge, so neither overlaps whatever is showing
+            double groupPad = 0;
+            if (dotShown && (media.HasTrack || shown != null)) groupPad += (GapW + MicIslandW + 4) * scale;
+            if (charging && (media.HasTrack || shown != null)) groupPad += (GapW + ChargeBadgeW + 4) * scale;
             double px = (cw - pw - groupPad) / 2.0 + groupPad;
             // cards keep a rounded-rect corner; capsules stay fully round
             double rad = CardRadius(ph, scale);
@@ -1307,9 +1333,32 @@ namespace DynamicIsland
                 }
             });
 
-            // The microphone island lives OUTSIDE the pill on the left. It is drawn
-            // BEFORE the clip is installed, so a tall event card cannot cut it off.
-            if (dotShown && animW > MicIslandW + 8) Guard("MicIslandLeft", delegate
+            // The microphone island lives OUTSIDE the pill on the LEFT, the charging badge
+            // on the RIGHT. Both are drawn before the clip is installed, so a tall event
+            // card can never cut them off.
+            GraphicsState state = g.Save();
+            using (GraphicsPath clip = Round(pill, (float)rad)) g.SetClip(clip);
+
+            double op = Anim.Smooth(open);
+            double hp = Anim.Smooth(hud);
+            bool activityMode = shown != null && op < 0.5;
+            bool mediaMode = !activityMode && media.HasTrack && op < 0.5;
+            bool detached = mediaMode && dotShown;
+
+            // The charge pill takes the island when nothing louder is happening. The
+            // microphone does not count as "louder": it lives beside the island, not in it.
+            // When both are idle there is only room for one, and the percentage is the more
+            // useful of the two, so the microphone yields for those few seconds.
+            bool chargePill = charging && !activityMode && !mediaMode && op < 0.5;
+            bool micPill = !charging && !activityMode && !mediaMode && dotShown && op < 0.5;
+
+            // A card or the player takes the island, so charging steps aside to the right.
+            bool chargeBadge = charging && (activityMode || mediaMode || op >= 0.5);
+            bool micBadge = dotShown && animW > MicIslandW + 8 && !chargePill;
+
+            g.Restore(state);
+
+            if (micBadge) Guard("MicIslandLeft", delegate
             {
                 dotW = MicIslandW * scale;
                 dotX = pill.X - (GapW * scale) - dotW;
@@ -1319,22 +1368,26 @@ namespace DynamicIsland
             });
             else { dotX = 0; dotW = 0; }
 
-            GraphicsState state = g.Save();
-            using (GraphicsPath clip = Round(pill, (float)rad)) g.SetClip(clip);
+            if (chargeBadge) Guard("ChargeIslandRight", delegate
+            {
+                chgW = ChargeBadgeW * scale;
+                chgX = pill.Right + (GapW * scale);
+                double ccy = pill.Y + Math.Min(pill.Height, IdleH * scale) / 2.0;
+                RectangleF cr = new RectangleF((float)chgX, (float)(ccy - chgW / 2), (float)chgW, (float)chgW);
+                DrawChargeIslandShape(g, cr, scale);
+            });
+            else { chgX = 0; chgW = 0; }
 
-            double op = Anim.Smooth(open);
-            double hp = Anim.Smooth(hud);
-            bool activityMode = shown != null && op < 0.5;
-            bool mediaMode = !activityMode && media.HasTrack && op < 0.5;
-            bool detached = mediaMode && dotShown;   // mini-player keeps clear of the mic island
-            bool micOnly = !activityMode && !mediaMode && dotShown && op < 0.5;
+            state = g.Save();
+            using (GraphicsPath clip2 = Round(pill, (float)rad)) g.SetClip(clip2);
 
             // collapsed: a plain black pill. Nothing is drawn unless something happens.
             if (activityMode) Guard("Activity", delegate { DrawActivity(g, pill, scale, shown); });
             else if (mediaMode) Guard("Media", delegate { DrawMiniPlayer(g, pill, scale, detached); });
-            else if (micOnly) Guard("MicIsland", delegate { DrawMicIsland(g, pill, scale); });
+            else if (chargePill) Guard("ChargePill", delegate { DrawChargePill(g, pill, scale); });
+            else if (micPill) Guard("MicIsland", delegate { DrawMicIsland(g, pill, scale); });
 
-            if (hp > 0.02 && op < 0.6 && !mediaMode && !micOnly && !activityMode)
+            if (hp > 0.02 && op < 0.6 && !mediaMode && !micPill && !activityMode && !chargePill)
                 Guard("Hud", delegate { DrawHud(g, pill, scale, Anim.Clamp01(hp) * (1 - op)); });
             if (op > 0.02 && !(hudMode && drag == 0))
                 Guard("Panel", delegate { DrawPanel(g, pill, scale, Anim.Clamp01(op)); });
@@ -1802,6 +1855,71 @@ namespace DynamicIsland
             return "usb";
         }
 
+        /// <summary>
+        /// Charging pill shown ON its own: green bolt and the percentage. Used when nothing
+        /// else is on screen; when something is, the badge moves beside the island instead.
+        /// </summary>
+        private void DrawChargePill(Graphics g, RectangleF pill, double s)
+        {
+            string pct = chargeText;
+            Font f = Fonts.Get("Segoe UI Variable Text", 13.5f * (float)s, FontStyle.Bold);
+            SizeF ts = SizeF.Empty;
+            using (Graphics gr = Graphics.FromHwnd(IntPtr.Zero)) { try { ts = g.MeasureString(pct, f); } catch { } }
+
+            double bolt = 17 * s;
+            double gap = 5 * s;
+            double pad = 12 * s;
+            double totalW = bolt + (pct.Length > 0 ? gap + ts.Width : 0);
+            double cx = pill.X + (pill.Width - totalW) / 2.0;
+            double cy = pill.Y + pill.Height / 2.0;
+
+            RectangleF box = new RectangleF((float)cx, (float)(cy - bolt / 2), (float)bolt, (float)bolt);
+            if (pct.Length > 0)
+            {
+                using (SolidBrush ink = new SolidBrush(Color.FromArgb(255, 90, 220, 130)))
+                using (StringFormat sf = new StringFormat())
+                {
+                    sf.LineAlignment = StringAlignment.Center;
+                    sf.Alignment = StringAlignment.Near;
+                    g.DrawString(pct, f, ink,
+                        new RectangleF((float)(cx + bolt + gap), pill.Y, (float)(ts.Width + 4), pill.Height), sf);
+                }
+            }
+            DrawBolt(g, box, s);
+        }
+
+        /// <summary>The detached charge badge: a small island on the right with the green bolt.</summary>
+        private void DrawChargeIslandShape(Graphics g, RectangleF box, double s)
+        {
+            using (GraphicsPath path = Round(box, (float)(box.Height / 2)))
+            {
+                using (SolidBrush body = new SolidBrush(Color.FromArgb(255, 6, 8, 6)))
+                    g.FillPath(body, path);
+                using (Pen rim = new Pen(Color.FromArgb(200, 40, 170, 80), Math.Max(1f, (float)(1.6 * s))))
+                    g.DrawPath(rim, path);
+            }
+            DrawBolt(g, new RectangleF(box.X + box.Width * 0.22f, box.Y + box.Height * 0.17f,
+                box.Width * 0.56f, box.Height * 0.66f), s);
+        }
+
+        /// <summary>Green lightning bolt.</summary>
+        private void DrawBolt(Graphics g, RectangleF box, double s)
+        {
+            float x = box.X, y = box.Y, w = box.Width, h = box.Height;
+            PointF[] pts = new PointF[]
+            {
+                new PointF(x + w * 0.58f, y + h * 0.00f),
+                new PointF(x + w * 0.22f, y + h * 0.56f),
+                new PointF(x + w * 0.47f, y + h * 0.56f),
+                new PointF(x + w * 0.38f, y + h * 1.00f),
+                new PointF(x + w * 0.79f, y + h * 0.42f),
+                new PointF(x + w * 0.52f, y + h * 0.42f)
+            };
+            using (SolidBrush fill = new SolidBrush(Color.FromArgb(255, 60, 210, 110)))
+                g.FillPolygon(fill, pts);
+            using (Pen edge = new Pen(Color.FromArgb(120, 210, 255, 220), Math.Max(0.8f, (float)(0.9 * s))))
+                g.DrawPolygon(edge, pts);
+        }
         /// <summary>Small capsule with just the glyph, used while a stopwatch/timer runs.</summary>
         private void DrawCompactGlyph(Graphics g, RectangleF pill, double s, Activity a)
         {
@@ -2758,6 +2876,7 @@ namespace DynamicIsland
         private AppLaunchWatcher appLaunches;
         private RadioWatcher radios;
         private DownloadWatcher downloads;
+        private ChargeWatcher charges;
         private string lastLanguage = "";
 
         // ------------------------------------------------------- activity intake
@@ -2861,6 +2980,15 @@ namespace DynamicIsland
                     if (parts.Length > 1) activities.DownloadDone(parts[1], 6);
                     break;
 
+                case "charging":
+                    if (parts.Length > 1)
+                    {
+                        int pc = -1;
+                        int.TryParse(parts[1].TrimEnd('%'), out pc);
+                        if (pc < 0) activities.ClearCharging(); else activities.ShowCharging(pc);
+                    }
+                    break;
+
                 case "app":
                     if (parts.Length > 1) activities.ShowAppLaunch(parts[1], null, 3);
                     break;
@@ -2928,6 +3056,24 @@ namespace DynamicIsland
                 BeginInvoke((MethodInvoker)delegate
                 {
                     activities.ShowRadio(what, on, 3);
+                    dirty = true;
+                });
+            }
+            catch { }
+        }
+
+        private void OnCharging(int percent)
+        {
+            try
+            {
+                if (!IsHandleCreated) return;
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    // a negative value is how the watcher reports "no longer charging"
+                    if (percent < 0)
+                        activities.ClearCharging();
+                    else
+                        activities.ShowCharging(percent);
                     dirty = true;
                 });
             }
@@ -3083,6 +3229,11 @@ namespace DynamicIsland
             downloads = new DownloadWatcher();
             downloads.Progress += OnDownloadProgress;
             downloads.Start();
+
+            // the battery being charged
+            charges = new ChargeWatcher();
+            charges.Charging += OnCharging;
+            charges.Start();
         }
 
         // ----------------------------------------------------------- geometry
@@ -3530,6 +3681,7 @@ namespace DynamicIsland
             try { if (appLaunches != null) appLaunches.Dispose(); } catch { }
             try { if (radios != null) radios.Dispose(); } catch { }
             try { if (downloads != null) downloads.Dispose(); } catch { }
+            try { if (charges != null) charges.Dispose(); } catch { }
             base.OnFormClosing(e);
         }
     }
@@ -3592,7 +3744,20 @@ namespace DynamicIsland
             if (args.Length > 0 && args[0] == "--selftest") return SelfTest();
             if (args.Length > 0 && args[0] == "--privacy") return PrivacyTest();
             if (args.Length > 0 && args[0] == "--watch") return WatchTest();
+            if (args.Length > 0 && args[0] == "--apps")
+            {
+                Console.WriteLine("== visible application windows ==");
+                AppLaunchWatcher.DescribeAll();
+                Console.WriteLine("APPS DONE");
+                return 0;
+            }
             if (args.Length > 0 && args[0] == "--probe-media") return MediaProbe.Run();
+            if (args.Length > 0 && args[0] == "--charge")
+            {
+                Console.WriteLine("power: " + ChargeWatcher.Describe());
+                Console.WriteLine("CHARGE DONE");
+                return 0;
+            }
             if (args.Length > 1 && args[0] == "--snapshot") return Snapshot(args[1]);
 
             // Any other argument is an activity command. If an island is already
@@ -3808,9 +3973,10 @@ namespace DynamicIsland
                                    "act-timer-running", "act-timer-done", "act-alarm-ring", "act-locked",
                                    "act-device-bt", "act-device-gamepad", "act-alarm-mic",
                                    "act-lang-rus", "act-lang-eng", "act-radio-bt-on", "act-radio-wifi-off",
-                                   "act-download", "act-download-unknown", "act-download-done", "act-app-open" };
+                                   "act-download", "act-download-unknown", "act-download-done", "act-app-open",
+                                   "act-charge", "act-charge-badge", "act-charge-mic", "act-charge-device-mic" };
 
-                for (int mode = 0; mode < 28; mode++)
+                for (int mode = 0; mode < 32; mode++)
                 {
                     Island island = new Island(null);
                     island.ApplySettings(new Settings());     // default 62 px resting width
@@ -3860,6 +4026,29 @@ namespace DynamicIsland
                         if (mode == 25) { mgr.DownloadProgress("ubuntu-24.04.iso", -1, 900000, -1); PoseActivity(island, mgr, TimeSpan.Zero); }
                         if (mode == 26) { mgr.DownloadDone("setup_installer_x64.exe", 30); PoseActivity(island, mgr, TimeSpan.Zero); }
                         if (mode == 27) { mgr.ShowAppLaunch("Photoshop", null, 30); PoseActivity(island, mgr, TimeSpan.Zero); }
+                        if (mode == 28) { mgr.ShowCharging(85); PoseActivity(island, mgr, TimeSpan.Zero); island.PoseChargeOnly(true, "85%"); }
+                        if (mode == 29)
+                        {
+                            mgr.ShowCharging(64);
+                            mgr.NotifyDevice("Jabra Elite 85h", "Jabra", 64, false, 30);
+                            PoseActivity(island, mgr, TimeSpan.Zero);
+                            island.PoseChargeOnly(true, "64%");
+                        }
+                        if (mode == 30)
+                        {
+                            mgr.ShowCharging(41);
+                            island.PosePrivacy(false, true, "Discord");
+                            PoseActivity(island, mgr, TimeSpan.Zero);
+                            island.PoseChargeOnly(true, "41%");
+                        }
+                        if (mode == 31)
+                        {
+                            mgr.ShowCharging(72);
+                            island.PosePrivacy(false, true, "Discord");
+                            island.PoseChargeOnly(true, "72%");
+                            mgr.NotifyDevice("Jabra Elite 85h", "Jabra", 72, false, 30);
+                            PoseActivity(island, mgr, TimeSpan.Zero);
+                        }
                         if (mode == 19)
                         {
                             mgr.RingAlarm(new TimeSpan(7, 30, 0), "Alarm 07:30");

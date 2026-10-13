@@ -205,10 +205,47 @@ namespace DynamicIsland
         [DllImport("user32.dll")] private static extern IntPtr GetShellWindow();
         [DllImport("user32.dll")] private static extern IntPtr GetDesktopWindow();
         [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr h, int i);
+        [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr h);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SendMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr64(IntPtr h, int i);
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] private static extern IntPtr GetWindowLongPtr32(IntPtr h, int i);
+        [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr h, uint cmd);
+        [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr h, out RECT r);
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr SHGetFileInfoW(string path, uint attrs, ref SHFILEINFO info, uint size, uint flags);
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         private static extern uint ExtractIconEx(string file, int index, IntPtr[] large, IntPtr[] small, uint count);
         [DllImport("user32.dll")] private static extern bool DestroyIcon(IntPtr h);
         private delegate bool EnumProc(IntPtr h, IntPtr p);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int Left, Top, Right, Bottom; }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct SHFILEINFO
+        {
+            public IntPtr hIcon;
+            public int iIcon;
+            public uint dwAttributes;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szDisplayName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)] public string szTypeName;
+        }
+
+        private const int GWL_EXSTYLE = -20;
+        private const int GWL_STYLE = -16;
+        private const int WS_EX_TOOLWINDOW = 0x00000080;
+        private const int WS_EX_NOACTIVATE = 0x08000000;
+        private const int WS_CHILD = 0x40000000;
+        private const int GCLP_HICON = -14;
+        private const int GCLP_HICONSM = -34;
+        private const uint WM_GETICON = 0x007F;
+        private const uint GW_OWNER = 4;
+        private static readonly IntPtr ICON_SMALL = IntPtr.Zero;
+        private static readonly IntPtr ICON_BIG = new IntPtr(1);
+        private static readonly IntPtr ICON_SMALL2 = new IntPtr(2);
+        private const uint SHGFI_ICON = 0x00000100;
+        private const uint SHGFI_LARGEICON = 0x00000000;
 
         private readonly HashSet<IntPtr> known = new HashSet<IntPtr>();
         private readonly Dictionary<string, DateTime> announced = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
@@ -229,6 +266,123 @@ namespace DynamicIsland
             catch { }
         }
 
+        private static IntPtr StyleOf(IntPtr h, int which)
+        {
+            try
+            {
+                // A 32-bit process must use the 32-bit entry point; picking by the running
+                // bitness keeps this correct either way.
+                return IntPtr.Size == 8 ? GetWindowLongPtr64(h, which) : GetWindowLongPtr32(h, which);
+            }
+            catch { return IntPtr.Zero; }
+        }
+
+        /// <summary>Window classes that are never an application the user "opened".</summary>
+        private static bool IsNoiseClass(string cls)
+        {
+            if (string.IsNullOrEmpty(cls)) return false;
+            string c = cls.ToLowerInvariant();
+            if (c == "shell_traywnd" || c == "shell_secondarytraywnd" || c == "progman") return true;
+            if (c == "workerw" || c == "tooltips_class32" || c == "sysshadow") return true;
+            if (c == "foregroundstaging" || c == "multitaskingviewframe") return true;
+            if (c == "xamlexplorerhost" || c == "internet explorer_server" || c == "ieframe") return true;
+            if (c.StartsWith("splwow") || c.StartsWith("nvidia") || c.StartsWith("amd")) return true;
+            if (c.StartsWith("chrome_widgetwin_0")) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Would the user call this "an application I just opened"? These filters matter:
+        /// without them the watcher fires for tool windows, dialogs, shell helpers and
+        /// splash screens, which is exactly what produced a random letter or the Explorer
+        /// icon for an unrelated program.
+        /// </summary>
+        private static bool IsRealAppWindow(IntPtr h, IntPtr shell, IntPtr desktop, uint self)
+        {
+            if (h == shell || h == desktop) return false;
+            if (!IsWindowVisible(h)) return false;
+            if (IsIconic(h)) return false;                                  // minimised, not opened
+
+            int style = (int)StyleOf(h, GWL_STYLE).ToInt64();
+            int ex = (int)StyleOf(h, GWL_EXSTYLE).ToInt64();
+            if ((style & WS_CHILD) != 0) return false;                      // a control
+            if ((ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) != 0) return false;
+            if (GetWindow(h, GW_OWNER) != IntPtr.Zero) return false;        // a dialog or popup
+
+            RECT r;
+            if (GetWindowRect(h, out r))
+            {
+                int w = r.Right - r.Left, ht = r.Bottom - r.Top;
+                if (w < 80 || ht < 60) return false;                        // splash or toast
+                if (w >= 16000 || ht >= 16000) return false;
+            }
+
+            if (GetWindowTextLengthW(h) < 2) return false;
+
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            if (pid == 0 || pid == self) return false;                      // never announce ourselves
+
+            // The input-experience window lives under a host process, so the name alone
+            // cannot rule it out - the title can.
+            try
+            {
+                int tl = GetWindowTextLengthW(h);
+                StringBuilder tb = new StringBuilder(tl + 2);
+                GetWindowTextW(h, tb, tb.Capacity);
+                string t = tb.ToString().Trim().ToLowerInvariant();
+                if (t.StartsWith("windows input experience") || t.StartsWith("интерфейс ввода windows"))
+                    return false;
+            }
+            catch { }
+
+            StringBuilder cls = new StringBuilder(256);
+            GetClassNameW(h, cls, cls.Capacity);
+            if (IsNoiseClass(cls.ToString())) return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Diagnostic: what the watcher resolves for every candidate window right now.
+        /// Tells "no icon was found" apart from "the wrong window was reported".
+        /// </summary>
+        public static void DescribeAll()
+        {
+            Console.WriteLine("  {0,-30} {1,-32} {2}", "window class", "resolved name", "icon");
+            IntPtr shell = GetShellWindow();
+            IntPtr desktop = GetDesktopWindow();
+            uint self = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+
+            EnumWindows(delegate(IntPtr h, IntPtr p)
+            {
+                try
+                {
+                    if (!IsRealAppWindow(h, shell, desktop, self)) return true;
+
+                    int len = GetWindowTextLengthW(h);
+                    StringBuilder sb = new StringBuilder(len + 2);
+                    GetWindowTextW(h, sb, sb.Capacity);
+                    string title = sb.ToString().Trim();
+
+                    StringBuilder cls = new StringBuilder(256);
+                    GetClassNameW(h, cls, cls.Capacity);
+
+                    uint pid;
+                    GetWindowThreadProcessId(h, out pid);
+                    string exe = ExePath(pid);
+                    string name = AppName(exe, title);
+                    Bitmap bmp = IconFor(h, exe);
+                    string icon = bmp == null ? "NONE (monogram)" : (bmp.Width + "x" + bmp.Height);
+                    if (bmp != null) bmp.Dispose();
+
+                    Console.WriteLine("  {0,-30} {1,-32} {2}", cls.ToString(), "[" + name + "]", icon);
+                }
+                catch { }
+                return true;
+            }, IntPtr.Zero);
+        }
+
         private void Poll()
         {
             try
@@ -236,27 +390,23 @@ namespace DynamicIsland
                 List<KeyValuePair<IntPtr, string>> fresh = new List<KeyValuePair<IntPtr, string>>();
                 IntPtr shell = GetShellWindow();
                 IntPtr desktop = GetDesktopWindow();
+                uint self = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
 
                 EnumWindows(delegate(IntPtr h, IntPtr p)
                 {
                     try
                     {
-                        if (h == shell || h == desktop) return true;
+                        // only a window seen for the first time can be "just opened"
                         if (known.Contains(h)) return true;
                         known.Add(h);
-                        if (!IsWindowVisible(h)) return true;
+
+                        if (!IsRealAppWindow(h, shell, desktop, self)) return true;
 
                         int len = GetWindowTextLengthW(h);
-                        if (len < 2) return true;
                         StringBuilder sb = new StringBuilder(len + 2);
                         GetWindowTextW(h, sb, sb.Capacity);
                         string title = sb.ToString().Trim();
                         if (title.Length < 2) return true;
-
-                        // skip tool windows: they are mostly popups and tray helpers
-                        int ex = GetWindowLong(h, -20);
-                        bool tool = (ex & 0x00000080) != 0;
-                        if (tool) return true;
 
                         fresh.Add(new KeyValuePair<IntPtr, string>(h, title));
                     }
@@ -279,7 +429,7 @@ namespace DynamicIsland
                         announced[name] = DateTime.Now;
                     }
 
-                    Bitmap icon = IconFor(exe);
+                    Bitmap icon = IconFor(kv.Key, exe);
                     Action<string, Bitmap> c = Launched;
                     if (c != null) { try { c(name, icon); } catch { } }
                 }
@@ -305,38 +455,217 @@ namespace DynamicIsland
             catch { return ""; }
         }
 
+        /// <summary>
+        /// Processes that only HOST other windows. They are not applications the user
+        /// opened, and naming them after the host is what produced nonsense such as
+        /// "Application Frame Host" and a monogram letter "A" for a UWP app.
+        /// </summary>
+        private static readonly HashSet<string> HostProcesses =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ApplicationFrameHost", "TextInputHost", "ShellExperienceHost",
+            "StartMenuExperienceHost", "SearchHost", "SearchApp", "RuntimeBroker",
+            "sihost", "ctfmon", "dwm", "LockApp", "WWAHost", "WindowsInternal.ComposableShell.Experiences.TextInput.InputApp"
+        };
+
+        /// <summary>Exe names that look nothing like the product they belong to.</summary>
+        private static readonly Dictionary<string, string> Friendly =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "chrome", "Chrome" }, { "msedge", "Edge" }, { "firefox", "Firefox" },
+            { "opera", "Opera" }, { "brave", "Brave" }, { "vivaldi", "Vivaldi" },
+            { "explorer", "Explorer" }, { "Code", "VS Code" }, { "devenv", "Visual Studio" },
+            { "WINWORD", "Word" }, { "EXCEL", "Excel" }, { "POWERPNT", "PowerPoint" },
+            { "OUTLOOK", "Outlook" }, { "olk", "Outlook" }, { "Teams", "Teams" },
+            { "ms-teams", "Teams" }, { "Discord", "Discord" }, { "Spotify", "Spotify" },
+            { "Telegram", "Telegram" }, { "WhatsApp", "WhatsApp" }, { "notepad", "Notepad" },
+            { "mspaint", "Paint" }, { "calc", "Calculator" },
+            { "ApplicationFrameHost", "Windows app" }, { "SystemSettings", "Settings" },
+            { "steam", "Steam" }, { "steamwebhelper", "Steam" },
+            { "EpicGamesLauncher", "Epic Games" }, { "blender", "Blender" },
+            { "obs64", "OBS Studio" }, { "vlc", "VLC" },
+            { "WindowsTerminal", "Terminal" }, { "wt", "Terminal" },
+            { "powershell", "PowerShell" }, { "pwsh", "PowerShell" },
+            { "cmd", "Command Prompt" }, { "mstsc", "Remote Desktop" },
+            { "Everything", "Everything" }, { "7zFM", "7-Zip" }, { "WinRAR", "WinRAR" }
+        };
+
+        /// <summary>
+        /// Display name. Prefers the executable's own description ("Google Chrome" rather
+        /// than "chrome"), then a friendly name, then the file name, and only as a last
+        /// resort makes something up from the window title.
+        /// </summary>
         private static string AppName(string exe, string title)
         {
             if (exe.Length > 0)
             {
-                string n = Path.GetFileNameWithoutExtension(exe);
-                if (n.Length > 0) return n;
+                string bare = Path.GetFileNameWithoutExtension(exe);
+
+                // a host process tells us nothing; the title is the better source
+                if (HostProcesses.Contains(bare))
+                {
+                    string fromTitleOnly = FromTitle(title);
+                    if (fromTitleOnly.Length > 0) return fromTitleOnly;
+                    return "";                      // nothing meaningful: do not announce
+                }
+
+                string desc = "";
+                try
+                {
+                    System.Diagnostics.FileVersionInfo vi = System.Diagnostics.FileVersionInfo.GetVersionInfo(exe);
+                    if (vi != null && !string.IsNullOrEmpty(vi.FileDescription))
+                        desc = vi.FileDescription.Trim();
+                }
+                catch { }
+
+                // "Google Chrome" is a better label than "chrome"; descriptions such as
+                // "Microsoft Windows Operating System" are worse than the file name.
+                if (desc.Length >= 3 && desc.Length <= 40 && !IsGenericDescription(desc))
+                    return desc;
+
+                // Settings and similar: the window title is localised and clearer than
+                // the internal executable name ("SystemSettings").
+                if (bare.StartsWith("SystemSettings", StringComparison.OrdinalIgnoreCase))
+                {
+                    string t2 = FromTitle(title);
+                    if (t2.Length > 0) return t2;
+                }
+
+                string friendly;
+                if (bare.Length > 0 && Friendly.TryGetValue(bare, out friendly)) return friendly;
+                if (bare.Length > 0) return bare;
             }
-            // fall back to the first words of the title
-            int cut = title.IndexOf(" - ", StringComparison.Ordinal);
-            return cut > 0 ? title.Substring(0, cut) : title;
+            return FromTitle(title);
         }
 
-        /// <summary>Icon of the application executable, or null when unavailable.</summary>
-        private static Bitmap IconFor(string exe)
+        private static bool IsGenericDescription(string d)
         {
-            if (exe.Length == 0) return null;
-            IntPtr[] large = new IntPtr[1];
-            IntPtr[] small = new IntPtr[1];
+            string s = d.ToLowerInvariant();
+            return s.StartsWith("microsoft windows")
+                || s.StartsWith("windows ")
+                || s.Contains("operating system")
+                || s == "application" || s == "setup" || s == "installer"
+                || s.EndsWith(".exe")
+                || s.StartsWith("http");
+        }
+
+        /// <summary>
+        /// Best effort name from a window title. Generic words are skipped so the monogram
+        /// letter is the first letter of something meaningful rather than of "Untitled".
+        /// </summary>
+        private static string FromTitle(string title)
+        {
+            if (string.IsNullOrEmpty(title)) return "";
+            string t = title.Trim();
+
+            string[] generic = { "untitled", "new tab", "new document", "без имени",
+                                 "новая вкладка", "loading", "please wait",
+                                 "settings", "настройки", "program manager",
+                                 "default ime", "start" };
+            foreach (string g in generic)
+                if (t.Equals(g, StringComparison.OrdinalIgnoreCase)) return "";
+
+            // "Document1 - Word" -> Word ; "page - Chrome" -> Chrome
+            string[] seps = { " - ", " – ", " — ", " | " };
+            foreach (string sep in seps)
+            {
+                int idx = t.LastIndexOf(sep, StringComparison.Ordinal);
+                if (idx > 0 && idx + sep.Length < t.Length)
+                {
+                    string tail = t.Substring(idx + sep.Length).Trim();
+                    if (tail.Length >= 2 && tail.Length <= 40) return tail;
+                }
+            }
+            return t.Length <= 40 ? t : "";
+        }
+
+        /// <summary>
+        /// Icon for a window, trying every source Windows offers. `WM_GETICON` is the
+        /// window's own icon and works for packaged apps; the window-class icon and the
+        /// executable cover the rest. Returns null only when nothing is available, so the
+        /// caller draws a monogram from the first letter of the name.
+        /// </summary>
+        private static Bitmap IconFor(IntPtr hwnd, string exe)
+        {
+            // 1. the window's own icon
+            IntPtr src = IntPtr.Zero;
+            try { src = SendMessageW(hwnd, WM_GETICON, ICON_BIG, IntPtr.Zero); } catch { }
+            if (src == IntPtr.Zero) { try { src = SendMessageW(hwnd, WM_GETICON, ICON_SMALL2, IntPtr.Zero); } catch { } }
+            if (src == IntPtr.Zero) { try { src = SendMessageW(hwnd, WM_GETICON, ICON_SMALL, IntPtr.Zero); } catch { } }
+            Bitmap bmp = src != IntPtr.Zero ? FromHandle(src) : null;
+
+            // 2. the window class icon
+            if (bmp == null)
+            {
+                src = StyleOf(hwnd, GCLP_HICON);
+                if (src == IntPtr.Zero) src = StyleOf(hwnd, GCLP_HICONSM);
+                if (src != IntPtr.Zero) bmp = FromHandle(src);
+            }
+
+            // 3. the executable's icon
+            if (bmp == null && exe.Length > 0)
+            {
+                IntPtr[] large = new IntPtr[1];
+                IntPtr[] small = new IntPtr[1];
+                try
+                {
+                    uint n = ExtractIconEx(exe, 0, large, small, 1);
+                    IntPtr use = large[0] != IntPtr.Zero ? large[0] : small[0];
+                    if (n > 0 && use != IntPtr.Zero) bmp = FromHandle(use);
+                }
+                catch { }
+                finally
+                {
+                    if (large[0] != IntPtr.Zero) { try { DestroyIcon(large[0]); } catch { } }
+                    if (small[0] != IntPtr.Zero) { try { DestroyIcon(small[0]); } catch { } }
+                }
+            }
+
+            // 4. the shell's idea of the file's icon
+            if (bmp == null && exe.Length > 0)
+            {
+                try
+                {
+                    SHFILEINFO fi = new SHFILEINFO();
+                    IntPtr r = SHGetFileInfoW(exe, 0, ref fi, (uint)Marshal.SizeOf(typeof(SHFILEINFO)),
+                        SHGFI_ICON | SHGFI_LARGEICON);
+                    if (r != IntPtr.Zero && fi.hIcon != IntPtr.Zero)
+                    {
+                        bmp = FromHandle(fi.hIcon);
+                        DestroyIcon(fi.hIcon);          // SHGetFileInfo hands over ownership
+                    }
+                }
+                catch { }
+            }
+
+            return bmp;
+        }
+
+        /// <summary>
+        /// Copies an HICON into a Bitmap. Drawn through GDI+ rather than Icon.ToBitmap(),
+        /// which turns 32-bit alpha icons into black boxes.
+        /// </summary>
+        private static Bitmap FromHandle(IntPtr hicon)
+        {
+            if (hicon == IntPtr.Zero) return null;
             try
             {
-                uint n = ExtractIconEx(exe, 0, large, small, 1);
-                IntPtr use = large[0] != IntPtr.Zero ? large[0] : small[0];
-                if (n == 0 || use == IntPtr.Zero) return null;
-                using (Icon ic = Icon.FromHandle(use))
-                    return ic.ToBitmap();
+                using (Icon ic = Icon.FromHandle(hicon))
+                {
+                    Size sz = ic.Size;
+                    if (sz.Width < 8 || sz.Height < 8) sz = new Size(32, 32);
+                    Bitmap bmp = new Bitmap(sz.Width, sz.Height,
+                        System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                    using (Graphics g = Graphics.FromImage(bmp))
+                    {
+                        g.Clear(Color.Transparent);
+                        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                        g.DrawIcon(ic, new Rectangle(0, 0, sz.Width, sz.Height));
+                    }
+                    return bmp;
+                }
             }
             catch { return null; }
-            finally
-            {
-                try { if (large[0] != IntPtr.Zero) DestroyIcon(large[0]); } catch { }
-                try { if (small[0] != IntPtr.Zero) DestroyIcon(small[0]); } catch { }
-            }
         }
 
         [DllImport("kernel32.dll", SetLastError = true)]
@@ -614,6 +943,115 @@ namespace DynamicIsland
                 if (n.EndsWith(e, StringComparison.OrdinalIgnoreCase))
                     n = n.Substring(0, n.Length - e.Length);
             return n.Length > 0 ? n : "download";
+        }
+
+        public void Dispose()
+        {
+            try { if (timer != null) { timer.Stop(); timer.Dispose(); } } catch { }
+        }
+    }
+
+    // ------------------------------------------------------------ charging
+    /// <summary>
+    /// Reports the battery being charged. Polled through GetSystemPowerStatus, which is
+    /// what the shell itself uses, so no battery driver and no admin rights are involved.
+    /// </summary>
+    internal sealed class ChargeWatcher : IDisposable
+    {
+        public event Action<int> Charging;          // percent, -1 when unknown
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SYSTEM_POWER_STATUS
+        {
+            public byte ACLineStatus;
+            public byte BatteryFlag;
+            public byte BatteryLifePercent;
+            public byte SystemStatusFlag;
+            public int BatteryLifeTime;
+            public int BatteryFullLifeTime;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetSystemPowerStatus(out SYSTEM_POWER_STATUS status);
+
+        private const byte BATTERY_FLAG_NO_BATTERY = 128;
+        private const byte BATTERY_PERCENT_UNKNOWN = 255;
+
+        private bool wasCharging;
+        private int lastPercent = -2;
+        private System.Windows.Forms.Timer timer;
+
+        public void Start()
+        {
+            int p;
+            wasCharging = Read(out p);              // seed: only a CHANGE is announced
+            lastPercent = p;
+
+            timer = new System.Windows.Forms.Timer();
+            timer.Interval = 4000;
+            timer.Tick += delegate { Poll(); };
+            timer.Start();
+        }
+
+        private void Poll()
+        {
+            try
+            {
+                int p;
+                bool charging = Read(out p);
+
+                if (charging != wasCharging)
+                {
+                    wasCharging = charging;
+                    lastPercent = p;
+                    Fire(charging ? p : -1);       // -1 means "stopped charging"
+                    return;
+                }
+                // while charging, keep the percentage fresh
+                if (charging && p != lastPercent)
+                {
+                    lastPercent = p;
+                    Fire(p);
+                }
+            }
+            catch { }
+        }
+
+        private void Fire(int percent)
+        {
+            Action<int> c = Charging;
+            if (c != null) { try { c(percent); } catch { } }
+        }
+
+        /// <summary>
+        /// True when the battery is actually taking charge: on AC power, a battery is
+        /// present, and the flag either says "charging" or "high" (full but plugged in).
+        /// </summary>
+        private static bool Read(out int percent)
+        {
+            percent = -1;
+            SYSTEM_POWER_STATUS s;
+            if (!GetSystemPowerStatus(out s)) return false;
+            if (s.BatteryFlag == BATTERY_FLAG_NO_BATTERY || s.BatteryFlag == 255) return false;
+
+            if (s.BatteryLifePercent != BATTERY_PERCENT_UNKNOWN) percent = s.BatteryLifePercent;
+
+            bool onAc = s.ACLineStatus == 1;
+            bool chargingFlag = (s.BatteryFlag & 0x08) != 0;      // BATTERY_FLAG_CHARGING
+            bool highFlag = (s.BatteryFlag & 0x04) != 0;          // BATTERY_FLAG_HIGH
+            return onAc && (chargingFlag || highFlag);
+        }
+
+        /// <summary>Diagnostic: print the raw power state.</summary>
+        public static string Describe()
+        {
+            SYSTEM_POWER_STATUS s;
+            if (!GetSystemPowerStatus(out s)) return "GetSystemPowerStatus failed";
+            int p;
+            bool charging = Read(out p);
+            return "ac=" + s.ACLineStatus + " flag=" + s.BatteryFlag
+                + " percent=" + s.BatteryLifePercent + " charging=" + charging
+                + " reported=" + (p < 0 ? "unknown" : p + "%");
         }
 
         public void Dispose()

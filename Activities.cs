@@ -14,7 +14,7 @@ using System.Globalization;
 namespace DynamicIsland
 {
     internal enum ActivityKind { Stopwatch = 0, Timer = 1, Alarm = 2, Notification = 3, Device = 4,
-                                  Language = 5, Download = 6, AppLaunch = 7, Radio = 8 }
+                                  Language = 5, Download = 6, AppLaunch = 7, Radio = 8, Charge = 9 }
 
     internal sealed class Activity
     {
@@ -104,10 +104,20 @@ namespace DynamicIsland
             try
             {
                 Activity a = Current();
+                Activity chg = Charging;
                 StringBuilder sb = new StringBuilder();
-                if (a == null)
+                if (a == null && chg == null)
                 {
                     sb.AppendLine("activity=none");
+                }
+                else if (a == null)
+                {
+                    // charging is drawn beside the island, not in it, so it never wins
+                    // Current() - report it separately instead of pretending nothing happens
+                    sb.AppendLine("activity=Charge");
+                    sb.AppendLine("label=" + chg.Label);
+                    sb.AppendLine("running=1");
+                    sb.AppendLine("finished=0");
                 }
                 else
                 {
@@ -402,6 +412,44 @@ namespace DynamicIsland
             Notify();
         }
 
+        /// <summary>
+        /// The battery started charging. This one is NOT part of the usual priority
+        /// queue: it is drawn in its own small island beside whatever else is showing,
+        /// exactly like the microphone does on the other side.
+        /// </summary>
+        public void ShowCharging(int percent)
+        {
+            lock (gate)
+            {
+                Activity a = Find(ActivityKind.Charge);
+                if (a == null)
+                {
+                    a = new Activity();
+                    a.Kind = ActivityKind.Charge;
+                    items.Add(a);
+                }
+                a.Label = percent < 0 ? "" : percent + "%";
+                a.GotBytes = percent;                 // reuse: the percentage
+                a.Running = true;
+                a.Finished = false;
+                a.ExpiresAt = DateTime.MaxValue;      // stays until unplugged
+            }
+            Notify();
+        }
+
+        /// <summary>Stops showing the charging badge.</summary>
+        public void ClearCharging()
+        {
+            lock (gate) Remove(ActivityKind.Charge);
+            Notify();
+        }
+
+        /// <summary>The charging activity, or null. Drawn beside the island, not in it.</summary>
+        public Activity Charging
+        {
+            get { lock (gate) return Find(ActivityKind.Charge); }
+        }
+
         // --------------------------------------------------------- notification
         public void Notify(string title, string body, int seconds)
         {
@@ -562,6 +610,29 @@ namespace DynamicIsland
             int n = 0;
             foreach (Activity a in items) if (a.Kind == kind) n++;
             return n;
+        }
+
+        /// <summary>
+        /// True when something other than the charging badge is on screen. Used to decide
+        /// whether the charge indicator rides inside the island or gets its own small
+        /// island on the right, the way the microphone does on the left.
+        /// </summary>
+        public bool HasContentBesidesCharge()
+        {
+            lock (gate)
+            {
+                foreach (Activity a in items)
+                {
+                    if (a.Kind == ActivityKind.Charge) continue;
+                    if (a.Kind == ActivityKind.Alarm) { if (a.Finished) return true; continue; }
+                    if (a.Kind == ActivityKind.Timer) { if (a.Running || a.Finished) return true; continue; }
+                    if (a.Kind == ActivityKind.Stopwatch) { if (a.Running || a.Elapsed > TimeSpan.Zero) return true; continue; }
+                    if (a.Kind == ActivityKind.Device || a.Kind == ActivityKind.Notification) return true;
+                    if (a.Kind == ActivityKind.Language || a.Kind == ActivityKind.Radio) return true;
+                    if (a.Kind == ActivityKind.Download || a.Kind == ActivityKind.AppLaunch) return true;
+                }
+                return false;
+            }
         }
 
         private void Remove(ActivityKind kind)
