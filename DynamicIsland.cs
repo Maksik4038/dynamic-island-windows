@@ -3538,7 +3538,54 @@ namespace DynamicIsland
     internal static class Program
     {
         [STAThread]
+        /// <summary>
+        /// Last-resort error reporting. Without this, ANY exception during startup kills
+        /// the process silently: no window, no console (this is a GUI subsystem build),
+        /// no clue at all. That is the worst failure mode on an unfamiliar machine, so the
+        /// error is reported twice - a message box that cannot be missed and a log file
+        /// next to the exe.
+        /// </summary>
+        internal static void ReportFatal(Exception ex)
+        {
+            string text = ex.GetType().Name + ": " + ex.Message;
+            string where = " startup";
+            try
+            {
+                if (ex.StackTrace != null)
+                {
+                    string[] lines = ex.StackTrace.Split('\n');
+                    if (lines.Length > 0) where = lines[0].Trim();
+                }
+            }
+            catch { }
+
+            string log = "";
+            try
+            {
+                log = System.IO.Path.Combine(
+                    System.IO.Path.GetDirectoryName(Application.ExecutablePath), "island-error.log");
+                System.IO.File.AppendAllText(log,
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + text + "\r\n" + where + "\r\n\r\n");
+            }
+            catch { }
+
+            try
+            {
+                Native.MessageBox(IntPtr.Zero,
+                    "Dynamic Island could not start.\r\n\r\n" + text + "\r\n\r\n" + where
+                    + (log.Length > 0 ? "\r\n\r\nFull details: " + log : ""),
+                    "Dynamic Island - error", 0x10 /* MB_ICONERROR */);
+            }
+            catch { }
+        }
+
         private static int Main(string[] args)
+        {
+            try { return Run(args); }
+            catch (Exception ex) { ReportFatal(ex); return 70; }
+        }
+
+        private static int Run(string[] args)
         {
             // DPI awareness must be set before any GDI+ surface is created
             Native.EnablePerMonitorDpi();

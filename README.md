@@ -110,6 +110,30 @@ Full command reference: [COMMANDS.md](COMMANDS.md).
 & $DI --snapshot DIR   # render every state to PNG (used for the shots above)
 ```
 
+## If it does not start
+
+Run the diagnostic first — it checks everything that commonly goes wrong and prints the
+result of the built-in self test:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Diagnose.ps1
+```
+
+The most frequent causes, in order:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `DynamicIsland.exe` is not there | build output is not stored in the repository | `Build.ps1` |
+| Build stops at `Windows.winmd not found` | Windows SDK 10 is missing | install it, or grab a Release exe |
+| Nothing happens at all, no window | .NET Framework 4.x missing | install .NET Framework 4.8 |
+| Window flashes and vanishes | a startup exception | there is now a message box, and `island-error.log` next to the exe |
+| It runs, but no island on screen | the app started fine — look for the tray icon | the pill is at the very top centre, y = 0 |
+| Nothing after downloading from GitHub | the file is flagged as from the internet | `Unblock-File .\DynamicIsland.exe` |
+
+Startup failures used to be completely silent: the executable is a GUI-subsystem build, so
+an exception produced no window, no console output and no clue. The entry point now reports
+any fatal exception in a message box **and** appends it to `island-error.log` beside the exe.
+
 ## How it works
 
 A layered window (`WS_EX_LAYERED` + `UpdateLayeredWindow`) over a persistent 32bpp DIB
@@ -133,6 +157,30 @@ Everything is read through plain Win32, COM and the WinRT projection:
 
 The media path is validated in a **child process** before the widget uses it: a wrong
 call against a WinRT vtable would otherwise take the whole app down.
+
+## Если не запускается (по-русски)
+
+Запустите диагностику — она проверит всё, что обычно мешает, и напечатает результат
+встроенного самотеста:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Diagnose.ps1
+```
+
+Частые причины:
+
+| Что видите | В чём дело | Что делать |
+|---|---|---|
+| Файла `DynamicIsland.exe` нет | собранный exe не хранится в репозитории | запустить `Build.ps1` |
+| Сборка падает: `Windows.winmd not found` | не установлен Windows SDK 10 | установить SDK или взять готовый exe из Releases |
+| Ничего не происходит, окна нет | не установлен .NET Framework 4.x | поставить .NET Framework 4.8 |
+| Окно мелькнуло и исчезло | исключение при запуске | теперь появится окно с ошибкой и файл `island-error.log` рядом с exe |
+| Работает, но острова не видно | приложение запустилось нормально | ищите значок в трее; остров в самом верху по центру, y = 0 |
+| После скачивания с GitHub ничего | файл помечен как из интернета | `Unblock-File .\DynamicIsland.exe` |
+
+Раньше сбой при запуске был **полностью молчаливым**: exe собран как GUI-приложение, поэтому
+исключение не показывало ни окна, ни вывода в консоль. Теперь любая фатальная ошибка
+попадает в окно сообщения и в `island-error.log` рядом с exe.
 
 ## Honest limitations
 
