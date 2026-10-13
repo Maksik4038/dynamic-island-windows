@@ -3707,11 +3707,16 @@ namespace DynamicIsland
         private static int SelfTest()
         {
             Console.WriteLine("== Dynamic Island self-test ==");
+            // Only things that are genuinely broken count as failures. A missing audio
+            // endpoint, no battery or no DDC/CI brightness is a normal configuration
+            // (servers, VMs, some desktops) - those are reported as notes, not errors,
+            // otherwise the test fails on machines where the app works fine.
             int failures = 0;
+            int notes = 0;
 
             float v = Audio.GetVolume();
-            Console.WriteLine("volume        : " + (v < 0 ? "UNAVAILABLE" : Math.Round(v * 100) + "%"));
-            if (v < 0) failures++;
+            Console.WriteLine("volume        : " + (v < 0 ? "UNAVAILABLE (no audio endpoint - volume HUD will be idle)" : Math.Round(v * 100) + "%"));
+            if (v < 0) notes++;
 
             bool m = Audio.GetMute();
             Console.WriteLine("mute state    : " + m);
@@ -3719,7 +3724,7 @@ namespace DynamicIsland
             Brightness.Probe();
             Console.WriteLine("brightness    : " + (Brightness.Available
                 ? Brightness.Get() + " (range " + Brightness.Min + "-" + Brightness.Max + ")"
-                : "UNAVAILABLE"));
+                : "UNAVAILABLE (no DDC/CI - shows n/a)"));
 
             Native.SYSTEM_POWER_STATUS ps;
             if (Native.GetSystemPowerStatus(out ps))
@@ -3729,28 +3734,46 @@ namespace DynamicIsland
                     ? "none present (desktop)"
                     : ps.BatteryLifePercent + "%  ac=" + ps.ACLineStatus));
             }
-            else { Console.WriteLine("battery       : UNAVAILABLE"); failures++; }
+            else { Console.WriteLine("battery       : UNAVAILABLE"); notes++; }
 
             int qs;
             Console.WriteLine("notif state   : " + (Native.SHQueryUserNotificationState(out qs) == 0 ? qs.ToString() : "n/a"));
 
             int dpiX, dpiY;
-            using (Graphics g = Graphics.FromHwnd(IntPtr.Zero))
-            { dpiX = (int)g.DpiX; dpiY = (int)g.DpiY; }
-            Console.WriteLine("screen dpi    : " + dpiX + "x" + dpiY);
-            Console.WriteLine("primary screen: " + Screen.PrimaryScreen.Bounds);
-            Console.WriteLine("work area     : " + Screen.PrimaryScreen.WorkingArea);
+            // a real display surface is mandatory: without it nothing can be drawn
+            try
+            {
+                using (Graphics g = Graphics.FromHwnd(IntPtr.Zero))
+                { dpiX = (int)g.DpiX; dpiY = (int)g.DpiY; }
+                Console.WriteLine("screen dpi    : " + dpiX + "x" + dpiY);
+                Console.WriteLine("primary screen: " + Screen.PrimaryScreen.Bounds);
+                Console.WriteLine("work area     : " + Screen.PrimaryScreen.WorkingArea);
+                if (Screen.PrimaryScreen.Bounds.Width <= 0) { Console.WriteLine("ERROR: no usable display"); failures++; }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("ERROR: no usable display - " + ex.Message);
+                failures++;
+            }
 
             IntPtr tb = Native.FindWindow("Shell_TrayWnd", null);
             Native.RECT r;
             if (tb != IntPtr.Zero && Native.GetWindowRect(tb, out r))
                 Console.WriteLine("taskbar rect  : L" + r.Left + " T" + r.Top + " R" + r.Right + " B" + r.Bottom);
-            else Console.WriteLine("taskbar rect  : not found");
+            else Console.WriteLine("taskbar rect  : not found (explorer not running?)");
 
             // one round of layout math, to be sure the geometry does not collapse
             Island probe = new Island(null);
             for (int i = 0; i < 240; i++) probe.Tick(1.0 / 60.0);
             Console.WriteLine("collapsed size: " + Math.Round(probe.Width) + " x " + Math.Round(probe.Height) + " dp");
+            if (probe.Width <= 0 || probe.Height <= 0)
+            {
+                Console.WriteLine("ERROR: layout collapsed to zero");
+                failures++;
+            }
+
+            if (notes > 0)
+                Console.WriteLine("notes         : " + notes + " optional feature(s) unavailable on this machine");
 
             Console.WriteLine(failures == 0 ? "SELFTEST PASS" : "SELFTEST FAIL (" + failures + ")");
             return failures == 0 ? 0 : 1;
