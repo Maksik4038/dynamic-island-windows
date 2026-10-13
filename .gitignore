@@ -3,6 +3,7 @@
 *.pdb
 bin/
 obj/
+release/
 
 # ---- runtime state written next to the exe ----
 settings.ini

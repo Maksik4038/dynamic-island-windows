@@ -1,0 +1,86 @@
+name: release
+
+# Builds DynamicIsland.exe and attaches it to a GitHub Release whenever a tag
+# like v1.0.0 is pushed. This is what makes the ready-to-run download possible:
+# the whole point is that people should NOT need the Windows SDK to use the app.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:          # also allow a manual run from the Actions tab
+
+permissions:
+  contents: write             # needed to create the release
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Show the toolchain
+        shell: pwsh
+        run: |
+          Write-Host "--- csc ---"
+          & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /?
+          Write-Host "--- Windows SDK ---"
+          Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\UnionMetadata" -ErrorAction SilentlyContinue
+
+      - name: Build
+        shell: pwsh
+        run: ./Build.ps1
+
+      - name: Verify the build actually starts
+        shell: pwsh
+        run: |
+          $out = "$env:TEMP\selftest.txt"
+          $p = Start-Process -FilePath .\DynamicIsland.exe -ArgumentList '--selftest' `
+                             -NoNewWindow -PassThru -RedirectStandardOutput $out
+          if (-not $p.WaitForExit(30000)) { $p.Kill(); throw "selftest timed out" }
+          Get-Content $out
+          if (-not (Select-String -Path $out -Pattern 'SELFTEST PASS' -Quiet)) {
+            throw "SELFTEST did not pass"
+          }
+
+      - name: Package for end users
+        shell: pwsh
+        run: |
+          $stage = "release/DynamicIsland"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          # the app itself plus everything a user needs to run it
+          Copy-Item DynamicIsland.exe, README.md, LICENSE, COMMANDS.md,
+                    Install.ps1, Diagnose.ps1, Run.cmd, Build.ps1 -Destination $stage
+          New-Item -ItemType Directory -Force -Path "$stage/shots" | Out-Null
+          Copy-Item shots/*.png -Destination "$stage/shots"
+
+          Compress-Archive -Path $stage -DestinationPath release/DynamicIsland.zip -Force
+          Get-Item release/DynamicIsland.zip | Format-List Name, Length
+
+      - name: Create the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/DynamicIsland.zip
+          generate_release_notes: true
+          body: |
+            ## Ready to run
+
+            Download **DynamicIsland.zip** below, unpack it anywhere and run
+            `DynamicIsland.exe`. No compiler and no Windows SDK needed — the
+            executable is already inside.
+
+            To have it start with Windows and appear in the Start Menu:
+
+            ```powershell
+            powershell -ExecutionPolicy Bypass -File Install.ps1
+            ```
+
+            If it does not start, run the bundled diagnostic and it will say why:
+
+            ```powershell
+            powershell -ExecutionPolicy Bypass -File Diagnose.ps1
+            ```
