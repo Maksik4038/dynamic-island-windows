@@ -7,6 +7,26 @@ whatever is happening on the machine.
 Built with nothing but the in-box .NET Framework compiler and Win32/GDI+. No installer
 framework, no external packages, one ~130 KB executable.
 
+## Get it
+
+**[⬇ Download DynamicIsland.zip](https://github.com/Maksik4038/dynamic-island-windows/releases/latest/download/DynamicIsland.zip)** — ready to run.
+
+Unpack it anywhere and start `DynamicIsland.exe`. The executable is already inside, so no
+compiler and no Windows SDK are needed. To have it start with Windows and appear in the
+Start Menu:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Install.ps1
+```
+
+If it will not start, the bundled diagnostic says why:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Diagnose.ps1
+```
+
+Requirements: Windows 11 and the .NET Framework 4.x, which ships with Windows.
+
 ![idle](shots/idle-black.png)
 
 ## What it shows
