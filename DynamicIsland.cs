@@ -105,6 +105,9 @@ namespace DynamicIsland
         public const int DESKTOP_SWITCHDESKTOP = 0x0100;
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] public static extern IntPtr GetShellWindow();
+        [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h, uint cmd);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
         [DllImport("user32.dll")] public static extern IntPtr GetDesktopWindow();
         [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr mon, ref MONITORINFO mi);
         [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
@@ -859,9 +862,14 @@ namespace DynamicIsland
         /// smaller notice card is used for device arrivals and notifications.
         /// </summary>
         /// <summary>
-        /// True when the foreground window covers its whole monitor, which means a
-        /// maximised browser or a real fullscreen app. The island then collapses to a thin
-        /// bar so it cannot sit on top of a tab strip or a toolbar.
+        /// True when the foreground window really fills the screen - a fullscreen video,
+        /// game or a browser in F11 - as opposed to a merely maximised window.
+        ///
+        /// The two are told apart by what Windows does to the frame. A maximised window
+        /// keeps a resizable frame, and Windows then places it a few pixels OUTSIDE the
+        /// monitor (measured here: -8..1688 on a monitor of 0..1680). A real fullscreen
+        /// window has no such frame and matches the monitor exactly. So a window that
+        /// spills past the screen edges is maximised, not fullscreen.
         /// </summary>
         private static bool IsFullscreenApp()
         {
@@ -870,6 +878,9 @@ namespace DynamicIsland
                 IntPtr h = Native.GetForegroundWindow();
                 if (h == IntPtr.Zero) return false;
                 if (h == Native.GetShellWindow() || h == Native.GetDesktopWindow()) return false;
+
+                // a dialog or popup belonging to another window is never "the app"
+                if (Native.GetWindow(h, 4 /* GW_OWNER */) != IntPtr.Zero) return false;
 
                 Native.RECT r;
                 if (!Native.GetWindowRect(h, out r)) return false;
@@ -880,13 +891,56 @@ namespace DynamicIsland
                 mi.cbSize = Marshal.SizeOf(typeof(Native.MONITORINFO));
                 if (!Native.GetMonitorInfo(mon, ref mi)) return false;
 
-                int tol = 2;        // maximised windows can overhang the work area a little
-                return r.Left <= mi.rcMonitor.Left + tol
-                    && r.Top <= mi.rcMonitor.Top + tol
-                    && r.Right >= mi.rcMonitor.Right - tol
-                    && r.Bottom >= mi.rcMonitor.Bottom - tol;
+                int outside = 1;    // a maximised window overhangs by about 8 px
+                if (r.Left < mi.rcMonitor.Left - outside) return false;
+                if (r.Top < mi.rcMonitor.Top - outside) return false;
+                if (r.Right > mi.rcMonitor.Right + outside) return false;
+                if (r.Bottom > mi.rcMonitor.Bottom + outside) return false;
+
+                // and it has to actually cover the screen in both axes
+                return r.Left <= mi.rcMonitor.Left + 1
+                    && r.Top <= mi.rcMonitor.Top + 1
+                    && r.Right >= mi.rcMonitor.Right - 1
+                    && r.Bottom >= mi.rcMonitor.Bottom - 1;
             }
             catch { return false; }
+        }
+
+        /// <summary>
+        /// Diagnostic text describing what the fullscreen test sees right now. Used by
+        /// --fullscreen so the decision can be checked against a real window.
+        /// </summary>
+        public static string DescribeFullscreen()
+        {
+            try
+            {
+                IntPtr h = Native.GetForegroundWindow();
+                if (h == IntPtr.Zero) return "no foreground window";
+                Native.RECT r;
+                if (!Native.GetWindowRect(h, out r)) return "GetWindowRect failed";
+                IntPtr mon = Native.MonitorFromWindow(h, Native.MONITOR_DEFAULTTONEAREST);
+                Native.MONITORINFO mi = new Native.MONITORINFO();
+                mi.cbSize = Marshal.SizeOf(typeof(Native.MONITORINFO));
+                if (!Native.GetMonitorInfo(mon, ref mi)) return "GetMonitorInfo failed";
+
+                StringBuilder title = new StringBuilder(300);
+                Native.GetWindowTextW(h, title, title.Capacity);
+
+                bool owner = Native.GetWindow(h, 4 /* GW_OWNER */) != IntPtr.Zero;
+                bool spills = r.Left < mi.rcMonitor.Left - 1 || r.Top < mi.rcMonitor.Top - 1
+                           || r.Right > mi.rcMonitor.Right + 1 || r.Bottom > mi.rcMonitor.Bottom + 1;
+
+                return "window   : " + title + "\r\n"
+                     + "rect     : L" + r.Left + " T" + r.Top + " R" + r.Right + " B" + r.Bottom + "\r\n"
+                     + "monitor  : L" + mi.rcMonitor.Left + " T" + mi.rcMonitor.Top
+                     + " R" + mi.rcMonitor.Right + " B" + mi.rcMonitor.Bottom + "\r\n"
+                     + "work area: L" + mi.rcWork.Left + " T" + mi.rcWork.Top
+                     + " R" + mi.rcWork.Right + " B" + mi.rcWork.Bottom + "\r\n"
+                     + "has owner: " + owner + "\r\n"
+                     + "spills past the screen edges (means maximised): " + spills + "\r\n"
+                     + "=> island goes flat: " + IsFullscreenApp();
+            }
+            catch (Exception ex) { return "error: " + ex.Message; }
         }
 
         /// <summary>
@@ -1058,7 +1112,7 @@ namespace DynamicIsland
                 return;
             }
 
-            if (host.HitTest(screen))
+            if (host.HitTest(screen) && !fullscreen)
             {
                 expanded = true;
                 if (volume < 0) PollVolume(true);
@@ -1316,6 +1370,14 @@ namespace DynamicIsland
                     Anim.Spring(ref animW, ref velW, OpenW, dt, 4.4);
                     Anim.Spring(ref animH, ref velH, OpenH, dt, 4.4);
                 }
+            }
+            else if (fullscreen)
+            {
+                // Fullscreen overrides every other size rule: the capsule must stay flat.
+                // These branches each used to hardcode IdleH, and they were quietly winning
+                // over the flat target - the island ended up pinned to the top but tall.
+                Anim.Spring(ref animW, ref velW, idleW, dt, 4.4);
+                Anim.Spring(ref animH, ref velH, FlatH, dt, 4.4);
             }
             else if (activityMode)
             {
@@ -3901,6 +3963,13 @@ namespace DynamicIsland
                 return 0;
             }
             if (args.Length > 0 && args[0] == "--probe-media") return MediaProbe.Run();
+            if (args.Length > 0 && args[0] == "--fullscreen")
+            {
+                Console.WriteLine("== fullscreen test ==");
+                Console.WriteLine(Island.DescribeFullscreen());
+                Console.WriteLine("FULLSCREEN DONE");
+                return 0;
+            }
             if (args.Length > 0 && args[0] == "--charge")
             {
                 Console.WriteLine("power: " + ChargeWatcher.Describe());
