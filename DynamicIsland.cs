@@ -494,8 +494,7 @@ namespace DynamicIsland
         private const int CardAppH = 120;
         private const int ChargePillW = 92;           // bolt + percentage
         private const int ChargeBadgeW = 30;          // the detached badge
-        private const int FlatW = 112;                // flat capsule while an app is fullscreen
-        private const int FlatH = 15;
+        private const int FlatH = 15;                 // flat capsule while an app is fullscreen
         private const int BandH = 4;                  // coloured strip along the top edge
 
         // ---- status colours: the island tints itself instead of drawing an icon ----
@@ -594,7 +593,7 @@ namespace DynamicIsland
             if (hud2) hudShownAt = DateTime.Now.AddSeconds(-(seconds > 0 ? seconds : 1));
             if (open2 && !hud2) { animW = OpenW; animH = OpenH; }
             else if (hud2) { animW = HudW; animH = IdleH; }
-            else if (fullscreen) { animW = FlatW; animH = FlatH; }
+            else if (fullscreen) { animW = idleW; animH = FlatH; }
             else { animW = idleW; animH = IdleH; }
             // a posed island must not be re-animated by the first Tick it receives
             velW = velH = velOpen = velHud = 0;
@@ -690,7 +689,7 @@ namespace DynamicIsland
         public void PoseFlat()
         {
             fullscreen = true;
-            animW = FlatW;
+            animW = idleW;          // same length as always, only flatter
             animH = FlatH;
             velW = velH = 0;
             expanded = false; open = 0; hud = 0; hudMode = false;
@@ -929,7 +928,7 @@ namespace DynamicIsland
         /// <summary>Width for a card: a touch wider than the compact glyph capsule.</summary>
         private double TargetWidth(Activity a)
         {
-            if (fullscreen) return FlatW;
+            if (fullscreen) return idleW;      // same length as always, just flat
             if (a == null) return idleW;
             switch (a.Kind)
             {
@@ -1354,7 +1353,9 @@ namespace DynamicIsland
             int ch = (int)Math.Round(CanvasH * scale);
             g.Clear(Color.Transparent);
 
-            double top = TopMarginPx * scale;
+            // In fullscreen the island hugs the very top edge, so it covers as little of
+            // the application as possible; otherwise it keeps its normal inset.
+            double top = (fullscreen ? 0 : TopMarginPx) * scale;
             double pw = animW * scale;
             double ph = animH * scale;
             // when the microphone dot is detached it sits to the LEFT of the pill, so the
