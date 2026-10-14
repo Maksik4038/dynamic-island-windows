@@ -835,8 +835,9 @@ namespace DynamicIsland
 
         private readonly Dictionary<string, Tracked> growing =
             new Dictionary<string, Tracked>(StringComparer.OrdinalIgnoreCase);
-        private readonly HashSet<string> knownComplete =
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Finished downloads: display name -> the size we called finished.</summary>
+        private readonly Dictionary<string, long> completed =
+            new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         private System.Windows.Forms.Timer timer;
 
         private string DownloadsDir
@@ -850,13 +851,20 @@ namespace DynamicIsland
 
         public void Start()
         {
-            // Files already present are history, not news.
+            // Files already present are history, not news: remember them as already
+            // "finished" with their current size, so nothing is announced at startup.
             try
             {
                 string dir = DownloadsDir;
                 if (Directory.Exists(dir))
+                {
                     foreach (string f in Directory.GetFiles(dir))
-                        knownComplete.Add(Path.GetFileName(f));
+                    {
+                        long len = 0;
+                        try { len = new FileInfo(f).Length; } catch { }
+                        completed[Path.GetFileName(f)] = len;
+                    }
+                }
             }
             catch { }
 
@@ -873,26 +881,12 @@ namespace DynamicIsland
 
             try
             {
-                // ---- 1. completed files: a file that is complete and not yet announced
-                foreach (string f in Directory.GetFiles(dir))
-                {
-                    string name = Path.GetFileName(f);
-                    if (knownComplete.Contains(name)) continue;
-
-                    long len = 0;
-                    DateTime wrote = DateTime.Now;
-                    try { FileInfo fi = new FileInfo(f); len = fi.Length; wrote = fi.LastWriteTime; } catch { }
-
-                    // ignore tiny leftovers and files that have not been written yet
-                    if (len < 32 * 1024) { knownComplete.Add(name); continue; }
-                    if ((DateTime.Now - wrote).TotalSeconds > 90) { knownComplete.Add(name); continue; }
-
-                    knownComplete.Add(name);
-                    Action<string, double, bool, long, long> c = Progress;
-                    if (c != null) { try { c(name, 1.0, true, len, len); } catch { } }
-                }
-
-                // ---- 2. partial files still being written: report progress
+                // ---- 1. partial files still being written: report progress
+                //
+                // This runs BEFORE the completion check on purpose. A partial file in the
+                // Downloads folder is unambiguous evidence of a download in progress, and
+                // acting on it first is what stops the old ping-pong where the island
+                // announced "downloaded" and then immediately went back to "downloading".
                 HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (string pat in PartialExt)
                 {
@@ -906,6 +900,14 @@ namespace DynamicIsland
                         seen.Add(key);
                         long size = 0;
                         try { size = new FileInfo(path).Length; } catch { }
+
+                        // A new transfer can reuse a name that we already called finished.
+                        // If the file grew again it is a NEW download, so forget the old
+                        // completion instead of looping forever.
+                        long doneSize;
+                        string plain = DisplayName(path);
+                        if (completed.TryGetValue(plain, out doneSize) && size > doneSize)
+                            completed.Remove(plain);
 
                         Tracked tr;
                         if (!growing.TryGetValue(key, out tr))
@@ -928,10 +930,30 @@ namespace DynamicIsland
                     }
                 }
 
+                // A partial that vanished means the transfer ended - that is the completion
+                // signal. The finished file itself is NOT enough: a fresh partial appearing
+                // next to it would otherwise be reported as "downloaded" first.
                 List<string> gone = new List<string>();
                 foreach (KeyValuePair<string, Tracked> kv in growing)
                     if (!seen.Contains(kv.Key)) gone.Add(kv.Key);
-                foreach (string key in gone) growing.Remove(key);
+
+                foreach (string key in gone)
+                {
+                    Tracked tr = growing[key];
+                    growing.Remove(key);
+
+                    string plain = DisplayName(tr.Path);
+                    long finalSize = 0;
+                    try { finalSize = new FileInfo(tr.Path).Length; } catch { }
+                    if (finalSize <= 0) finalSize = tr.Size;      // it is gone; use the last seen size
+
+                    if (tr.Size >= 64 * 1024)                     // ignore trivia
+                    {
+                        completed[plain] = finalSize;
+                        Action<string, double, bool, long, long> c = Progress;
+                        if (c != null) { try { c(plain, 1.0, true, finalSize, finalSize); } catch { } }
+                    }
+                }
             }
             catch { }
         }

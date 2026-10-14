@@ -273,6 +273,30 @@ powershell -ExecutionPolicy Bypass -File Build.ps1
 требует проверки личности; самоподписанный сертификат не поможет, потому что
 ему по умолчанию никто не доверяет.
 
+## Status colours and fullscreen
+
+Instead of drawing a separate icon for every event, the island tints a thin strip along
+its top edge:
+
+| Event | Colour |
+|---|---|
+| Charging | green |
+| Microphone in use | orange |
+| Music playing | blue |
+| Keyboard layout switched | white |
+| Bluetooth / Wi-Fi | red |
+| Download | cyan |
+| Device, notification, timer, alarm, app launch | purple |
+
+Several events at once are drawn side by side, so the island reads as "part green, part
+orange". This also means the microphone stays visible while charging, without either one
+hiding the other.
+
+When any application is fullscreen — a maximised browser with many tabs, a game, a video —
+the island collapses to a **flat 112 × 15 capsule** so it cannot cover a tab strip or a
+toolbar. In that state it shows the colours only; content and expansion are suppressed until
+the fullscreen window goes away.
+
 ## Honest limitations
 
 These are real restrictions of the platform, not unfinished work:

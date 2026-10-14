@@ -104,6 +104,8 @@ namespace DynamicIsland
         public static extern bool SwitchDesktop(IntPtr h);
         public const int DESKTOP_SWITCHDESKTOP = 0x0100;
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] public static extern IntPtr GetShellWindow();
+        [DllImport("user32.dll")] public static extern IntPtr GetDesktopWindow();
         [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr mon, ref MONITORINFO mi);
         [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
         [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
@@ -492,6 +494,18 @@ namespace DynamicIsland
         private const int CardAppH = 120;
         private const int ChargePillW = 92;           // bolt + percentage
         private const int ChargeBadgeW = 30;          // the detached badge
+        private const int FlatW = 112;                // flat capsule while an app is fullscreen
+        private const int FlatH = 15;
+        private const int BandH = 4;                  // coloured strip along the top edge
+
+        // ---- status colours: the island tints itself instead of drawing an icon ----
+        private static readonly Color BandCharge = Color.FromArgb(255, 48, 209, 88);    // green
+        private static readonly Color BandMic = Color.FromArgb(255, 255, 159, 10);      // orange
+        private static readonly Color BandMusic = Color.FromArgb(255, 10, 132, 255);    // blue
+        private static readonly Color BandLanguage = Color.FromArgb(255, 245, 245, 247); // white
+        private static readonly Color BandRadio = Color.FromArgb(255, 255, 69, 58);     // red
+        private static readonly Color BandDownload = Color.FromArgb(255, 90, 200, 250); // cyan
+        private static readonly Color BandEvent = Color.FromArgb(255, 191, 90, 242);    // purple
 
         // ---- the microphone accent, matching the reference look ----
         private static readonly Color MicInk = Color.FromArgb(255, 242, 158, 24);       // icon glyph
@@ -541,6 +555,8 @@ namespace DynamicIsland
         private double digitsT;                       // drives the ringing blink
         private bool locked;                          // workstation locked
         private DateTime lastLockPoll = DateTime.MinValue;
+        private bool fullscreen;                       // an app covers the whole screen
+        private DateTime lastFullscreenPoll = DateTime.MinValue;
 
         // ---- new: privacy + media ----
         private PrivacyState privacy = new PrivacyState();
@@ -578,6 +594,7 @@ namespace DynamicIsland
             if (hud2) hudShownAt = DateTime.Now.AddSeconds(-(seconds > 0 ? seconds : 1));
             if (open2 && !hud2) { animW = OpenW; animH = OpenH; }
             else if (hud2) { animW = HudW; animH = IdleH; }
+            else if (fullscreen) { animW = FlatW; animH = FlatH; }
             else { animW = idleW; animH = IdleH; }
             // a posed island must not be re-animated by the first Tick it receives
             velW = velH = velOpen = velHud = 0;
@@ -656,6 +673,9 @@ namespace DynamicIsland
             expanded = false; open = 0; hud = 0; hudMode = false;
         }
 
+        /// <summary>Snapshot helper: pretend an application is fullscreen.</summary>
+        public void PoseFullscreen(bool on) { fullscreen = on; }
+
         /// <summary>Snapshot helper: pretend the battery is charging.</summary>
         public void PoseChargeOnly(bool on, string text)
         {
@@ -665,6 +685,16 @@ namespace DynamicIsland
 
         /// <summary>Snapshot helper: pretend the workstation is locked.</summary>
         public void PoseLocked(bool value) { locked = value; }
+
+        /// <summary>Snapshot helper: force the flat fullscreen capsule regardless of content.</summary>
+        public void PoseFlat()
+        {
+            fullscreen = true;
+            animW = FlatW;
+            animH = FlatH;
+            velW = velH = 0;
+            expanded = false; open = 0; hud = 0; hudMode = false;
+        }
 
         public void PoseGeometry(double width, double height)
         {
@@ -830,6 +860,37 @@ namespace DynamicIsland
         /// smaller notice card is used for device arrivals and notifications.
         /// </summary>
         /// <summary>
+        /// True when the foreground window covers its whole monitor, which means a
+        /// maximised browser or a real fullscreen app. The island then collapses to a thin
+        /// bar so it cannot sit on top of a tab strip or a toolbar.
+        /// </summary>
+        private static bool IsFullscreenApp()
+        {
+            try
+            {
+                IntPtr h = Native.GetForegroundWindow();
+                if (h == IntPtr.Zero) return false;
+                if (h == Native.GetShellWindow() || h == Native.GetDesktopWindow()) return false;
+
+                Native.RECT r;
+                if (!Native.GetWindowRect(h, out r)) return false;
+
+                IntPtr mon = Native.MonitorFromWindow(h, Native.MONITOR_DEFAULTTONEAREST);
+                if (mon == IntPtr.Zero) return false;
+                Native.MONITORINFO mi = new Native.MONITORINFO();
+                mi.cbSize = Marshal.SizeOf(typeof(Native.MONITORINFO));
+                if (!Native.GetMonitorInfo(mon, ref mi)) return false;
+
+                int tol = 2;        // maximised windows can overhang the work area a little
+                return r.Left <= mi.rcMonitor.Left + tol
+                    && r.Top <= mi.rcMonitor.Top + tol
+                    && r.Right >= mi.rcMonitor.Right - tol
+                    && r.Bottom >= mi.rcMonitor.Bottom - tol;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
         /// Corner radius. Capsules are fully round; once the island grows past capsule
         /// height the radius eases toward a rounded rectangle instead of snapping.
         /// </summary>
@@ -844,6 +905,8 @@ namespace DynamicIsland
         }
         private double TargetHeight(Activity a)
         {
+            // fullscreen: a thin flat bar, whatever else wants to show
+            if (fullscreen) return FlatH;
             if (a == null) return IdleH;
             switch (a.Kind)
             {
@@ -866,6 +929,7 @@ namespace DynamicIsland
         /// <summary>Width for a card: a touch wider than the compact glyph capsule.</summary>
         private double TargetWidth(Activity a)
         {
+            if (fullscreen) return FlatW;
             if (a == null) return idleW;
             switch (a.Kind)
             {
@@ -1190,6 +1254,19 @@ namespace DynamicIsland
                 if (privacyDirty) { privacyDirty = false; ApplyPrivacy(privacyPending); }
             }
             // lock screen: a small padlock appears beside the island
+            // fullscreen: collapse to a flat bar so no tab strip is covered
+            if ((DateTime.Now - lastFullscreenPoll).TotalMilliseconds > 400)
+            {
+                lastFullscreenPoll = DateTime.Now;
+                bool wasFull = fullscreen;
+                try { fullscreen = IsFullscreenApp(); } catch { }
+                if (fullscreen != wasFull)
+                {
+                    if (fullscreen) expanded = false;      // never cover a fullscreen app
+                    if (host != null) host.NeedFrame();
+                }
+            }
+
             if ((DateTime.Now - lastLockPoll).TotalMilliseconds > 900)
             {
                 lastLockPoll = DateTime.Now;
@@ -1382,17 +1459,25 @@ namespace DynamicIsland
             using (GraphicsPath clip2 = Round(pill, (float)rad)) g.SetClip(clip2);
 
             // collapsed: a plain black pill. Nothing is drawn unless something happens.
-            if (activityMode) Guard("Activity", delegate { DrawActivity(g, pill, scale, shown); });
+            // In fullscreen the flat capsule carries colours only, never content.
+            if (fullscreen)
+            {
+                /* the bands below are all it shows */
+            }
+            else if (activityMode) Guard("Activity", delegate { DrawActivity(g, pill, scale, shown); });
             else if (mediaMode) Guard("Media", delegate { DrawMiniPlayer(g, pill, scale, detached); });
             else if (chargePill) Guard("ChargePill", delegate { DrawChargePill(g, pill, scale); });
             else if (micPill) Guard("MicIsland", delegate { DrawMicIsland(g, pill, scale); });
 
-            if (hp > 0.02 && op < 0.6 && !mediaMode && !micPill && !activityMode && !chargePill)
+            if (!fullscreen && hp > 0.02 && op < 0.6 && !mediaMode && !micPill && !activityMode && !chargePill)
                 Guard("Hud", delegate { DrawHud(g, pill, scale, Anim.Clamp01(hp) * (1 - op)); });
-            if (op > 0.02 && !(hudMode && drag == 0))
+            if (!fullscreen && op > 0.02 && !(hudMode && drag == 0))
                 Guard("Panel", delegate { DrawPanel(g, pill, scale, Anim.Clamp01(op)); });
 
             g.Restore(state);
+
+            // status colours along the top edge, over whatever the pill is showing
+            Guard("Bands", delegate { DrawBands(g, pill, scale, BandColors()); });
 
             // lock screen: a small padlock beside the island
             if (locked && !expanded) Guard("Lock", delegate { DrawLockGlyph(g, pill, scale); });
@@ -1902,6 +1987,69 @@ namespace DynamicIsland
                 box.Width * 0.56f, box.Height * 0.66f), s);
         }
 
+        /// <summary>
+        /// The status colours to show as strips along the top edge. Several at once are
+        /// drawn side by side, so the island reads as "part green, part orange".
+        /// </summary>
+        private List<Color> BandColors()
+        {
+            List<Color> list = new List<Color>();
+            if (charging) list.Add(BandCharge);
+            if (dotShown) list.Add(BandMic);
+            if (media.HasTrack && media.Playing) list.Add(BandMusic);
+
+            Activity a = shown;
+            if (a != null)
+            {
+                switch (a.Kind)
+                {
+                    case ActivityKind.Language: list.Add(BandLanguage); break;
+                    case ActivityKind.Radio: list.Add(BandRadio); break;
+                    case ActivityKind.Download: list.Add(BandDownload); break;
+                    case ActivityKind.Device:
+                    case ActivityKind.Notification:
+                    case ActivityKind.AppLaunch:
+                    case ActivityKind.Timer:
+                    case ActivityKind.Stopwatch:
+                    case ActivityKind.Alarm:
+                        list.Add(BandEvent); break;
+                }
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// Paints the colour strip. Clipped to the capsule so it follows the rounded shape,
+        /// with a soft falloff downward so it reads as a glow rather than a hard edge.
+        /// </summary>
+        private void DrawBands(Graphics g, RectangleF pill, double s, List<Color> colors)
+        {
+            if (colors == null || colors.Count == 0) return;
+
+            // Proportional to the capsule, not a fixed number of pixels: the band has to
+            // look right on a 37 dp pill AND on the 15 dp flat one. Kept deliberately thin
+            // so it reads as an edge light rather than as a fill.
+            float h = (float)Math.Max(1.2 * s, Math.Min(BandH * s * 0.38, pill.Height * 0.15));
+            float falloff = h * 0.8f;
+            float bandW = pill.Width / colors.Count;
+
+            GraphicsState st = g.Save();
+            using (GraphicsPath clip = Round(pill, (float)Math.Min(pill.Height / 2.0, 26 * s)))
+                g.SetClip(clip);
+
+            for (int i = 0; i < colors.Count; i++)
+            {
+                RectangleF r = new RectangleF((float)(pill.X + bandW * i), pill.Y, bandW + 1f, h);
+                using (LinearGradientBrush br = new LinearGradientBrush(
+                    new RectangleF(r.X, pill.Y, r.Width, h + falloff),
+                    Color.FromArgb(255, colors[i]), Color.FromArgb(0, colors[i]),
+                    LinearGradientMode.Vertical))
+                {
+                    g.FillRectangle(br, r);
+                }
+            }
+            g.Restore(st);
+        }
         /// <summary>Green lightning bolt.</summary>
         private void DrawBolt(Graphics g, RectangleF box, double s)
         {
@@ -3974,9 +4122,12 @@ namespace DynamicIsland
                                    "act-device-bt", "act-device-gamepad", "act-alarm-mic",
                                    "act-lang-rus", "act-lang-eng", "act-radio-bt-on", "act-radio-wifi-off",
                                    "act-download", "act-download-unknown", "act-download-done", "act-app-open",
-                                   "act-charge", "act-charge-badge", "act-charge-mic", "act-charge-device-mic" };
+                                   "act-charge", "act-charge-badge", "act-charge-mic", "act-charge-device-mic",
+                                   "band-charge", "band-mic", "band-charge-lang", "band-wifi",
+                                   "band-download", "band-three", "flat-charge-mic", "flat-lang",
+                                   "flat-idle" };
 
-                for (int mode = 0; mode < 32; mode++)
+                for (int mode = 0; mode < 41; mode++)
                 {
                     Island island = new Island(null);
                     island.ApplySettings(new Settings());     // default 62 px resting width
@@ -4048,6 +4199,42 @@ namespace DynamicIsland
                             island.PoseChargeOnly(true, "72%");
                             mgr.NotifyDevice("Jabra Elite 85h", "Jabra", 72, false, 30);
                             PoseActivity(island, mgr, TimeSpan.Zero);
+                        }
+                        if (mode == 32) { island.PoseChargeOnly(true, ""); PoseActivity(island, mgr, TimeSpan.Zero); }
+                        if (mode == 33) { island.PosePrivacy(false, true, "Discord"); PoseActivity(island, mgr, TimeSpan.Zero); }
+                        if (mode == 34) { mgr.ShowLanguage("rus", 30); island.PoseChargeOnly(true, ""); PoseActivity(island, mgr, TimeSpan.Zero); }
+                        if (mode == 35) { mgr.ShowRadio("wi-fi", false, 30); PoseActivity(island, mgr, TimeSpan.Zero); }
+                        if (mode == 36) { mgr.DownloadProgress("ubuntu-24.04.iso", -1, 900000, -1); PoseActivity(island, mgr, TimeSpan.Zero); }
+                        if (mode == 37)
+                        {
+                            mgr.ShowCharging(70);
+                            island.PoseChargeOnly(true, "");
+                            island.PosePrivacy(false, true, "Discord");
+                            mgr.NotifyDevice("Jabra Elite 85h", "Jabra", 70, false, 30);
+                            PoseActivity(island, mgr, TimeSpan.Zero);
+                        }
+                        if (mode == 38)
+                        {
+                            island.PoseFullscreen(true);
+                            island.PoseChargeOnly(true, "");
+                            island.PosePrivacy(false, true, "Discord");
+                            mgr.NotifyDevice("Jabra Elite 85h", "Jabra", 70, false, 30);
+                            PoseActivity(island, mgr, TimeSpan.Zero);
+                            island.PoseFlat();
+                        }
+                        if (mode == 39)
+                        {
+                            island.PoseFullscreen(true);
+                            mgr.ShowLanguage("eng", 30);
+                            PoseActivity(island, mgr, TimeSpan.Zero);
+                            island.PoseFlat();
+                        }
+                        if (mode == 40)
+                        {
+                            island.PoseFullscreen(true);
+                            island.PosePrivacy(false, true, "Discord");
+                            PoseActivity(island, mgr, TimeSpan.Zero);
+                            island.PoseFlat();
                         }
                         if (mode == 19)
                         {
