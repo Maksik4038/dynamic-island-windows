@@ -292,10 +292,11 @@ Several events at once are drawn side by side, so the island reads as "part gree
 orange". This also means the microphone stays visible while charging, without either one
 hiding the other.
 
-When any application is fullscreen — a maximised browser with many tabs, a game, a video —
-the island collapses to a **flat 112 × 15 capsule** so it cannot cover a tab strip or a
-toolbar. In that state it shows the colours only; content and expansion are suppressed until
-the fullscreen window goes away.
+When a window fills the whole working area - a browser in F11, a game, a video player, or
+any window using the entire screen - the island collapses to a **flat capsule** at the very
+top edge, the same length as always but only 15 dp tall, showing the status colours and
+nothing else. The taskbar being visible does not change this. Use `& $DI --fullscreen` to
+see exactly what the detection decides for the window you have in front.
 
 ## Honest limitations
 

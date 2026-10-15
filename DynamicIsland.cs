@@ -106,6 +106,8 @@ namespace DynamicIsland
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] public static extern IntPtr GetShellWindow();
         [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h, uint cmd);
+        [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
+        [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         public static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
         [DllImport("user32.dll")] public static extern IntPtr GetDesktopWindow();
@@ -875,11 +877,9 @@ namespace DynamicIsland
         {
             try
             {
-                IntPtr h = Native.GetForegroundWindow();
+                IntPtr h = Native.GetAncestor(Native.GetForegroundWindow(), 2 /* GA_ROOT */);
                 if (h == IntPtr.Zero) return false;
                 if (h == Native.GetShellWindow() || h == Native.GetDesktopWindow()) return false;
-
-                // a dialog or popup belonging to another window is never "the app"
                 if (Native.GetWindow(h, 4 /* GW_OWNER */) != IntPtr.Zero) return false;
 
                 Native.RECT r;
@@ -891,21 +891,22 @@ namespace DynamicIsland
                 mi.cbSize = Marshal.SizeOf(typeof(Native.MONITORINFO));
                 if (!Native.GetMonitorInfo(mon, ref mi)) return false;
 
-                int outside = 1;    // a maximised window overhangs by about 8 px
-                if (r.Left < mi.rcMonitor.Left - outside) return false;
-                if (r.Top < mi.rcMonitor.Top - outside) return false;
-                if (r.Right > mi.rcMonitor.Right + outside) return false;
-                if (r.Bottom > mi.rcMonitor.Bottom + outside) return false;
-
-                // and it has to actually cover the screen in both axes
-                return r.Left <= mi.rcMonitor.Left + 1
-                    && r.Top <= mi.rcMonitor.Top + 1
-                    && r.Right >= mi.rcMonitor.Right - 1
-                    && r.Bottom >= mi.rcMonitor.Bottom - 1;
+                // Filling the work area means the window is using the whole screen: a
+                // browser in F11, a game, a video player, or a maximised window. A window
+                // that merely happens to be large does not reach the far edges.
+                //
+                // Checked against the work area rather than the monitor on purpose: a real
+                // fullscreen window and a maximised one both cover the work area, and both
+                // are the cases where the island gets in the way. The taskbar staying
+                // visible does not change that.
+                int tol = 2;
+                return r.Left <= mi.rcWork.Left + tol
+                    && r.Top <= mi.rcWork.Top + tol
+                    && r.Right >= mi.rcWork.Right - tol
+                    && r.Bottom >= mi.rcWork.Bottom - tol;
             }
             catch { return false; }
         }
-
         /// <summary>
         /// Diagnostic text describing what the fullscreen test sees right now. Used by
         /// --fullscreen so the decision can be checked against a real window.

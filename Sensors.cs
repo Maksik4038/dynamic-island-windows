@@ -340,6 +340,9 @@ namespace DynamicIsland
             GetClassNameW(h, cls, cls.Capacity);
             if (IsNoiseClass(cls.ToString())) return false;
 
+            // Explorer's helper windows are shell plumbing, not apps the user opened
+            if (IsShellPlumbing(cls.ToString(), ExePath(pid))) return false;
+
             return true;
         }
 
@@ -376,7 +379,27 @@ namespace DynamicIsland
                     string icon = bmp == null ? "NONE (monogram)" : (bmp.Width + "x" + bmp.Height);
                     if (bmp != null) bmp.Dispose();
 
-                    Console.WriteLine("  {0,-30} {1,-32} {2}", cls.ToString(), "[" + name + "]", icon);
+                    string proc = "";
+                    try
+                    {
+                        IntPtr ph = OpenProcess(0x1000, false, pid);
+                        if (ph != IntPtr.Zero)
+                        {
+                            try
+                            {
+                                StringBuilder pn = new StringBuilder(1024);
+                                int psz = pn.Capacity;
+                                if (QueryFullProcessImageName(ph, 0, pn, ref psz))
+                                    proc = Path.GetFileNameWithoutExtension(pn.ToString());
+                            }
+                            finally { CloseHandle(ph); }
+                        }
+                    }
+                    catch { }
+
+                    Console.WriteLine("  {0,-26} {1,-15} {2,-10} {3,-28} {4}",
+                        cls.ToString(), proc, "[" + title.Substring(0, Math.Min(28, title.Length)) + "]",
+                        "name=[" + name + "]", icon);
                 }
                 catch { }
                 return true;
@@ -420,7 +443,9 @@ namespace DynamicIsland
                     GetWindowThreadProcessId(kv.Key, out pid);
                     string exe = ExePath(pid);
                     string name = AppName(exe, kv.Value);
-                    if (name.Length == 0) continue;
+                    // A one-character name produces a meaningless monogram letter, which is
+                    // exactly what showed up as a "random letter" for unrelated windows.
+                    if (name.Length < 2) continue;
 
                     lock (announced)
                     {
@@ -467,6 +492,22 @@ namespace DynamicIsland
             "StartMenuExperienceHost", "SearchHost", "SearchApp", "RuntimeBroker",
             "sihost", "ctfmon", "dwm", "LockApp", "WWAHost", "WindowsInternal.ComposableShell.Experiences.TextInput.InputApp"
         };
+
+        /// <summary>
+        /// Explorer is the shell itself and spawns a stream of helper windows, which is why
+        /// it kept showing up as an "opened application". Only its real folder windows
+        /// (CabinetWClass) count; everything else it owns is shell plumbing.
+        /// </summary>
+        private static bool IsShellPlumbing(string cls, string exe)
+        {
+            string c = cls == null ? "" : cls.ToLowerInvariant();
+            bool fromExplorer = exe != null && exe.EndsWith("explorer.exe", StringComparison.OrdinalIgnoreCase);
+            if (!fromExplorer) return false;
+
+            // a folder window is the one case the user did open on purpose
+            if (c == "cabinetwclass") return false;
+            return true;
+        }
 
         /// <summary>Exe names that look nothing like the product they belong to.</summary>
         private static readonly Dictionary<string, string> Friendly =
@@ -558,10 +599,16 @@ namespace DynamicIsland
             if (string.IsNullOrEmpty(title)) return "";
             string t = title.Trim();
 
+            // A title we cannot turn into a name is worse than showing nothing: this is
+            // where the random single letters came from (a window titled "." or "3 items").
+            if (t.Length < 3) return "";
+            char first = t[0];
+            if (!char.IsLetterOrDigit(first)) return "";
+
             string[] generic = { "untitled", "new tab", "new document", "без имени",
                                  "новая вкладка", "loading", "please wait",
                                  "settings", "настройки", "program manager",
-                                 "default ime", "start" };
+                                 "default ime", "start", "item", "items", "selected" };
             foreach (string g in generic)
                 if (t.Equals(g, StringComparison.OrdinalIgnoreCase)) return "";
 
