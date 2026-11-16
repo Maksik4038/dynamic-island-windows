@@ -82,6 +82,8 @@ namespace DynamicIsland
         // tray / menu
         public const int WM_APP = 0x8000, WM_TRAYICON = WM_APP + 1;
         public const int WM_RBUTTONUP = 0x0205, WM_LBUTTONUP = 0x0202;
+        public const int WM_NCHITTEST = 0x0084;
+        public const int HTTRANSPARENT = -1, HTCLIENT = 1;
         public const int NIM_ADD = 0, NIM_DELETE = 2;
         public const int NIF_MESSAGE = 1, NIF_ICON = 2, NIF_TIP = 4;
         public const int MF_STRING = 0, MF_SEPARATOR = 0x800, MF_CHECKED = 8, MF_POPUP = 0x10;
@@ -495,7 +497,7 @@ namespace DynamicIsland
         public const int CanvasW = 470, CanvasH = 268;
         public const int TopMarginPx = 7;
         private const int IdleH = 37;                 // collapsed height; width comes from settings
-        private const int OpenW = 371, OpenH = 202;
+        private const int OpenH = 202;                // expanded height
         private const int HudW = 276;                 // compact volume capsule
         private const int GapW = 7;                   // gap between the little mic island and the pill
         private const int MediaW = 300;               // mini-player with artwork
@@ -558,6 +560,11 @@ namespace DynamicIsland
         private double pulseT;
         private Settings settings = new Settings();
         private int idleW = 62;                       // collapsed width, from settings
+        private int openW = 371;                      // expanded width, from settings (up to full screen)
+        private int offsetX;                          // horizontal offset along the top edge, dp
+        /// <summary>Logical surface width in dp the pill is placed within. The host sets this
+        /// to the screen width so the panel can span corner to corner; the snapshot keeps 470.</summary>
+        public double ViewW = CanvasW;
         private double dotX, dotW;                    // detached microphone dot geometry
         private bool dotShown;
         private long seekPreviewMs = -1;              // while dragging the progress bar
@@ -607,7 +614,7 @@ namespace DynamicIsland
         {            expanded = open2;
             hudMode = hud2;
             if (hud2) hudShownAt = DateTime.Now.AddSeconds(-(seconds > 0 ? seconds : 1));
-            if (open2 && !hud2) { animW = OpenW; animH = OpenH; }
+            if (open2 && !hud2) { animW = openW; animH = OpenH; }
             else if (hud2) { animW = HudW; animH = IdleH; }
             else if (fullscreen) { animW = idleW; animH = FlatH; }
             else { animW = idleW; animH = IdleH; }
@@ -809,9 +816,34 @@ namespace DynamicIsland
         {
             settings = s;
             idleW = Settings.Clamp(s.IdleWidth);
+            openW = ClampOpen(s.OpenWidth);
+            offsetX = ClampOffset(s.OffsetX);
+        }
+
+        /// <summary>Expanded width clamped against the surface the pill can occupy.</summary>
+        private int ClampOpen(int w)
+        {
+            int max = (int)ViewW;
+            int min = Math.Min(Settings.MinOpenWidth, max);
+            if (w < min) w = min;
+            if (w > max) w = max;
+            return w;
+        }
+
+        /// <summary>Offset clamped so the pill can never move further than one screen.</summary>
+        private int ClampOffset(int w)
+        {
+            int max = (int)(ViewW / 2.0);
+            if (w < -max) w = -max;
+            if (w > max) w = max;
+            return w;
         }
 
         public int IdleWidth { get { return idleW; } }
+
+        public int OpenWidth { get { return openW; } }
+
+        public int OffsetX { get { return offsetX; } }
 
         public void AttachActivities(ActivityManager m) { activities = m; }
 
@@ -1051,7 +1083,7 @@ namespace DynamicIsland
             Rectangle b = host.Bounds;
             double s = host.ScaleForIsland;
             double pw = animW * s, ph = animH * s;
-            double pillX = b.Left + (b.Width - pw) / 2 + (dotShown && media.HasTrack ? (GapW + MicIslandW) * s : 0);
+            double pillX = b.Left + (b.Width - pw) / 2 + offsetX * s + (dotShown && media.HasTrack ? (GapW + MicIslandW) * s : 0);
             double pillY = b.Top + TopMarginPx * s;
             double pad = 10 * s, d = 22 * s;
             double cy = pillY + ph / 2;
@@ -1067,7 +1099,7 @@ namespace DynamicIsland
             Rectangle b = host.Bounds;
             double s = host.ScaleForIsland;
             double pw = animW * s, ph = animH * s;
-            double pillX = b.Left + (b.Width - pw) / 2 + (dotShown && media.HasTrack ? (GapW + 16) * s : 0);
+            double pillX = b.Left + (b.Width - pw) / 2 + offsetX * s + (dotShown && media.HasTrack ? (GapW + 16) * s : 0);
             double pad = 10 * s;
             float barH = (float)(2.6 * s);
             float barY = (float)(b.Top + TopMarginPx * s + ph) - (float)pad * 0.75f;
@@ -1083,7 +1115,7 @@ namespace DynamicIsland
             Rectangle b = host.Bounds;
             double s = host.ScaleForIsland;
             double pw = animW * s, ph = animH * s;
-            double pillX = b.Left + (b.Width - pw) / 2 + (dotShown && media.HasTrack ? (GapW + 16) * s : 0);
+            double pillX = b.Left + (b.Width - pw) / 2 + offsetX * s + (dotShown && media.HasTrack ? (GapW + 16) * s : 0);
             return new Rectangle((int)(pillX + pw * 0.6), (int)(b.Top + TopMarginPx * s),
                 (int)(pw * 0.4), (int)ph);
         }
@@ -1319,8 +1351,10 @@ namespace DynamicIsland
                 if (privacyDirty) { privacyDirty = false; ApplyPrivacy(privacyPending); }
             }
             // lock screen: a small padlock appears beside the island
-            // fullscreen: collapse to a flat bar so no tab strip is covered
-            if ((DateTime.Now - lastFullscreenPoll).TotalMilliseconds > 400)
+            // fullscreen: collapse to a flat bar so no tab strip is covered.
+            // Only the live island polls this; a standalone probe (snapshot / --selftest)
+            // must stay deterministic, otherwise the foreground window changes its size.
+            if (host != null && (DateTime.Now - lastFullscreenPoll).TotalMilliseconds > 400)
             {
                 lastFullscreenPoll = DateTime.Now;
                 bool wasFull = fullscreen;
@@ -1328,7 +1362,7 @@ namespace DynamicIsland
                 if (fullscreen != wasFull)
                 {
                     if (fullscreen) expanded = false;      // never cover a fullscreen app
-                    if (host != null) host.NeedFrame();
+                    host.NeedFrame();
                 }
             }
 
@@ -1379,7 +1413,7 @@ namespace DynamicIsland
                 }
                 else
                 {
-                    Anim.Spring(ref animW, ref velW, OpenW, dt, 4.4, 0.72);
+                    Anim.Spring(ref animW, ref velW, openW, dt, 4.4, 0.72);
                     Anim.Spring(ref animH, ref velH, OpenH, dt, 4.4, 0.72);
                 }
             }
@@ -1423,7 +1457,7 @@ namespace DynamicIsland
         // -------------------------------------------------------------- drawing
         public void Draw(Graphics g, double scale)
         {
-            int cw = (int)Math.Round(CanvasW * scale);
+            int cw = (int)Math.Round(ViewW * scale);
             int ch = (int)Math.Round(CanvasH * scale);
             g.Clear(Color.Transparent);
 
@@ -1440,7 +1474,11 @@ namespace DynamicIsland
             double groupPad = 0;
             if (dotShown && (media.HasTrack || shown != null)) groupPad += (GapW + MicIslandW + 4) * scale;
             if (charging && (media.HasTrack || shown != null)) groupPad += (GapW + ChargeBadgeW + 4) * scale;
-            double px = (cw - pw - groupPad) / 2.0 + groupPad;
+            double px = (cw - pw - groupPad) / 2.0 + groupPad + offsetX * scale;
+            // keep the shifted pill on screen (the badges may still clip at the edge, which
+            // is the point of moving the island toward a corner)
+            if (px < 0) px = 0;
+            if (px + pw > cw) px = cw - pw;
             // cards keep a rounded-rect corner; capsules stay fully round
             double rad = CardRadius(ph, scale);
 
@@ -3474,10 +3512,20 @@ namespace DynamicIsland
             double ns = Math.Max(1.0, dx / 96.0);
             if (!force && Math.Abs(ns - scale) < 0.01) return;
             scale = ns;
-            canvasW = (int)Math.Round(Island.CanvasW * scale);
+
+            // The window spans the whole screen width so the expanded panel can stretch
+            // from corner to corner. It is click-through everywhere except over the pill
+            // (see WndProc / WM_NCHITTEST), so it never blocks the apps below it.
+            try { canvasW = Screen.PrimaryScreen.Bounds.Width; }
+            catch { canvasW = (int)Math.Round(Island.CanvasW * scale); }
             canvasH = (int)Math.Round(Island.CanvasH * scale);
+            island.ViewW = canvasW / scale;
+
             ClientSize = new Size(canvasW, canvasH);
             RebuildBackBuffer();
+
+            // re-clamp the settings against the (possibly new) surface width
+            if (settings != null) island.ApplySettings(settings);
             dirty = true;
         }
 
@@ -3569,8 +3617,9 @@ namespace DynamicIsland
             try
             {
                 Rectangle b = Screen.PrimaryScreen.Bounds;
-                int x = b.Left + (b.Width - (int)Math.Round(Island.CanvasW * scale)) / 2;
-                Location = new Point(x, AnchorTop());
+                // The window spans the whole screen width (so the expanded panel can reach
+                // corner to corner), so it is anchored at the left edge instead of centred.
+                Location = new Point(b.Left, AnchorTop());
             }
             catch { }
         }
@@ -3656,6 +3705,17 @@ namespace DynamicIsland
                 if (evt == Native.WM_RBUTTONUP) { ShowTrayMenu(); return; }
                 if (evt == Native.WM_LBUTTONUP) { Place(); dirty = true; return; }
             }
+            if (m.Msg == Native.WM_NCHITTEST)
+            {
+                // The window spans the whole screen width, so it must be click-through
+                // everywhere except over the pill. Otherwise it would swallow clicks on
+                // the top strip of every maximised window.
+                long lp = m.LParam.ToInt64();
+                int x = unchecked((short)(lp & 0xFFFF));
+                int y = unchecked((short)((lp >> 16) & 0xFFFF));
+                m.Result = HitTest(new Point(x, y)) ? new IntPtr(Native.HTCLIENT) : new IntPtr(Native.HTTRANSPARENT);
+                return;
+            }
             base.WndProc(ref m);
         }
 
@@ -3702,6 +3762,10 @@ namespace DynamicIsland
                         break;
                     case IdCenter:
                     case IdReset:
+                        // return the island to the horizontal centre (offsetx = 0)
+                        settings.OffsetX = 0;
+                        settings.Save();
+                        island.ApplySettings(settings);
                         Place(); dirty = true; break;
                     case IdAutoStart:
                         ToggleAutoStart(); break;
@@ -3749,7 +3813,7 @@ namespace DynamicIsland
             int pad = (int)Math.Round(4 * scale);
             int pw = (int)Math.Round(island.Width * scale);
             int ph = (int)Math.Round(island.Height * scale);
-            Rectangle pill = new Rectangle(b.Left + (b.Width - pw) / 2 - pad,
+            Rectangle pill = new Rectangle(b.Left + (b.Width - pw) / 2 + (int)Math.Round(island.OffsetX * scale) - pad,
                                            b.Top + (int)Math.Round(Island.TopMarginPx * scale) - pad,
                                            pw + pad * 2, ph + pad * 2);
             return pill.Contains(screen);
@@ -3770,7 +3834,7 @@ namespace DynamicIsland
             Rectangle b = Bounds;
             double s = scale;
             int pw = (int)Math.Round(island.Width * s);
-            int px = b.Left + (b.Width - pw) / 2;
+            int px = b.Left + (b.Width - pw) / 2 + (int)Math.Round(island.OffsetX * s);
             int py = b.Top + (int)Math.Round(Island.TopMarginPx * s);
             double pad = 16 * s;
             int trackX = (int)(px + pad + 28 * s);
@@ -4354,7 +4418,7 @@ namespace DynamicIsland
                         island.PoseGeometry(300, 37);
                     }
 
-                    int w = (int)Math.Round(Island.CanvasW * scale);
+                    int w = (int)Math.Round(island.ViewW * scale);
                     int h = (int)Math.Round(Island.CanvasH * scale);
                     using (Bitmap canvas = new Bitmap(w, h, PixelFormat.Format32bppArgb))
                     {

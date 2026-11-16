@@ -65,6 +65,19 @@ More states are in [`shots/`](shots) — one PNG per state, rendered by the app 
 Resting width is configurable from a dot (16 px) up to 220 px; below capsule height the
 island becomes a true circle.
 
+Three values live in `settings.ini` next to the exe (edit it and restart, or use the tray
+menu → *Edit settings file*):
+
+| Key | Meaning | Default |
+|---|---|---|
+| `idlewidth` | collapsed pill width, 16–220 | `62` |
+| `openwidth` | expanded panel width, up to the full screen width (corner to corner) | `371` |
+| `offsetx` | horizontal offset along the top edge: negative = left, positive = right | `0` |
+
+`openwidth` is clamped to the screen width at run time, so `openwidth=5000` simply makes the
+expanded panel span the whole screen. `offsetx` is clamped so the pill always stays on
+screen. The tray menu → *Center island* resets `offsetx` to zero.
+
 ## Building
 
 Requirements: .NET Framework 4.x (ships with Windows) and the **Windows SDK 10** (needed
