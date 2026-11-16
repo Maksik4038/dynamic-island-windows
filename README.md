@@ -78,6 +78,13 @@ menu: **Position** (horizontal offset), **Expanded width** and **Resting width**
 expanded panel span the whole screen. `offsetx` is clamped so the pill always stays on
 screen. The tray menu → *Center island* resets `offsetx` to zero.
 
+Every tray submenu also has a **Custom value...** item, so instead of presets you can type
+any number directly into a small dialog.
+
+`openwidth` controls the **shell** of the island. The content inside it (clock, waveform,
+volume and brightness sliders) keeps its own comfortable width and stays centred, so a
+corner-to-corner panel does not stretch its guts across the screen.
+
 ## Building
 
 Requirements: .NET Framework 4.x (ships with Windows) and the **Windows SDK 10** (needed

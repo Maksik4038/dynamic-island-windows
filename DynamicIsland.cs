@@ -498,6 +498,12 @@ namespace DynamicIsland
         public const int TopMarginPx = 7;
         private const int IdleH = 37;                 // collapsed height; width comes from settings
         private const int OpenH = 202;                // expanded height
+        /// <summary>
+        /// Maximum width of the CONTENT inside the expanded panel. The island shell itself
+        /// can be stretched corner to corner, but the guts (waveform, clock, sliders) stay
+        /// at a comfortable size, centred in the shell.
+        /// </summary>
+        internal const int PanelMaxW = 520;
         private const int HudW = 276;                 // compact volume capsule
         private const int GapW = 7;                   // gap between the little mic island and the pill
         private const int MediaW = 300;               // mini-player with artwork
@@ -2735,20 +2741,33 @@ namespace DynamicIsland
         }
 
         /// <summary>Full expanded panel: waveform, clock, battery, then volume + brightness rows.</summary>
+        /// <summary>
+        /// The region the panel's CONTENT is laid out in. The shell may be much wider than
+        /// this (openwidth up to the full screen), but the guts stay at a comfortable width
+        /// and are centred inside the shell - the user asked for the width of the island,
+        /// not the width of its interior.
+        /// </summary>
+        private static RectangleF ContentRect(RectangleF pill, double s)
+        {
+            double cw = Math.Min(pill.Width, PanelMaxW * s);
+            return new RectangleF((float)(pill.X + (pill.Width - cw) / 2.0), pill.Y, (float)cw, pill.Height);
+        }
+
         private void DrawPanel(Graphics g, RectangleF pill, double s, double opacity)
         {
             int a = (int)(255 * opacity);
             if (a <= 2) return;
+            RectangleF c = ContentRect(pill, s);         // the interior, not the shell
             double pad = 16 * s;
             double top = pill.Y + 11 * s;
 
             // ---- battery readout owns the top row, so it never collides with the waveform
-            DrawBattery(g, new RectangleF((float)(pill.Right - pad - 52 * s),
+            DrawBattery(g, new RectangleF((float)(c.Right - pad - 52 * s),
                 (float)(top + 3 * s), (float)(18 * s), (float)(10 * s)), s, (int)(a * 0.85));
 
             double level = volume < 0 ? 0.5 : (muted ? 0.04 : 0.16 + volume * 0.84);
-            DrawWave(g, new RectangleF((float)(pill.X + pad), (float)(top + 24 * s),
-                (float)(pill.Width - pad * 2), (float)(26 * s)), s, level, a);
+            DrawWave(g, new RectangleF((float)(c.X + pad), (float)(top + 24 * s),
+                (float)(c.Width - pad * 2), (float)(26 * s)), s, level, a);
 
             Font fDate = Fonts.Get("Segoe UI Variable Text", 9.6f * (float)s, FontStyle.Regular);
             Font fTime = Fonts.Get("Segoe UI Variable Display", 19.5f * (float)s, FontStyle.Regular);
@@ -2764,39 +2783,39 @@ namespace DynamicIsland
 
                 string battText = battery >= 0 ? battery + "%" + (charging ? " +" : "") : "AC";
                 g.DrawString(battText, fSmall, soft,
-                    new RectangleF((float)(pill.Right - pad - 32 * s), (float)(top - 1 * s), (float)(32 * s), (float)(18 * s)), right);
+                    new RectangleF((float)(c.Right - pad - 32 * s), (float)(top - 1 * s), (float)(32 * s), (float)(18 * s)), right);
 
                 float y = (float)(top + 62 * s);
                 g.DrawString(dateText, fDate, dim,
-                    new RectangleF((float)(pill.X + pad), y, (float)(pill.Width - pad * 2), (float)(15 * s)), sf);
+                    new RectangleF((float)(c.X + pad), y, (float)(c.Width - pad * 2), (float)(15 * s)), sf);
                 g.DrawString(DateTime.Now.ToString("HH:mm"), fTime, ink,
-                    new RectangleF((float)(pill.X + pad), (float)(y + 12 * s), (float)(pill.Width - pad * 2), (float)(32 * s)), sf);
+                    new RectangleF((float)(c.X + pad), (float)(y + 12 * s), (float)(c.Width - pad * 2), (float)(32 * s)), sf);
 
                 // separator
                 using (Pen pen = new Pen(Color.FromArgb((int)(a * 0.12), 255, 255, 255), (float)(1 * s)))
-                    g.DrawLine(pen, (float)(pill.X + pad), (float)(pill.Y + 120 * s), (float)(pill.Right - pad), (float)(pill.Y + 120 * s));
+                    g.DrawLine(pen, (float)(c.X + pad), (float)(pill.Y + 120 * s), (float)(c.Right - pad), (float)(pill.Y + 120 * s));
 
                 // ---- volume row
                 double row1 = pill.Y + 127 * s;
-                DrawSpeaker(g, new RectangleF((float)(pill.X + pad), (float)(row1 - 1 * s),
+                DrawSpeaker(g, new RectangleF((float)(c.X + pad), (float)(row1 - 1 * s),
                     (float)(19 * s), (float)(19 * s)), s, a, muted);
-                double tx = pill.X + pad + 28 * s;
-                double tw = pill.Width - pad * 2 - 28 * s - 44 * s;
+                double tx = c.X + pad + 28 * s;
+                double tw = c.Width - pad * 2 - 28 * s - 44 * s;
                 DrawSlider(g, (float)tx, (float)(row1 + 8.5 * s), (float)tw, s,
                     volume < 0 ? 0 : (muted ? 0 : volume), a, null);
                 string volText = muted ? "muted" : (volume < 0 ? "--" : Math.Round(volume * 100) + "%");
                 g.DrawString(volText, fSmall, soft,
-                    new RectangleF((float)(pill.Right - pad - 40 * s), (float)(row1 + 1 * s), (float)(40 * s), (float)(16 * s)), right);
+                    new RectangleF((float)(c.Right - pad - 40 * s), (float)(row1 + 1 * s), (float)(40 * s), (float)(16 * s)), right);
 
                 // ---- brightness row
                 double row2 = pill.Y + 152 * s;
-                DrawSun(g, new RectangleF((float)(pill.X + pad), (float)(row2 - 1 * s),
+                DrawSun(g, new RectangleF((float)(c.X + pad), (float)(row2 - 1 * s),
                     (float)(19 * s), (float)(19 * s)), s, a, brightness);
                 bool bav = brightness >= 0;
                 double bfrac = bav ? Anim.Clamp01((brightness - Brightness.Min) / (double)Math.Max(1, Brightness.Max - Brightness.Min)) : 0;
                 DrawSlider(g, (float)tx, (float)(row2 + 8.5 * s), (float)tw, s, bfrac, a, null);
                 g.DrawString(bav ? Math.Round(bfrac * 100) + "%" : "n/a", fSmall, soft,
-                    new RectangleF((float)(pill.Right - pad - 40 * s), (float)(row2 + 1 * s), (float)(40 * s), (float)(16 * s)), right);
+                    new RectangleF((float)(c.Right - pad - 40 * s), (float)(row2 + 1 * s), (float)(40 * s), (float)(16 * s)), right);
             }
         }
 
@@ -3075,6 +3094,7 @@ namespace DynamicIsland
         private const int IdExit = 1, IdCenter = 2, IdReset = 3, IdAutoStart = 4, IdAbout = 5;
         private const int IdWidthBase = 100, IdEditSettings = 6;
         private const int IdOpenBase = 500, IdOffsetBase = 600;
+        private const int IdOffsetCustom = 700, IdOpenCustom = 701, IdWidthCustom = 702;
 
         /// <summary>Resting-width presets offered in the tray menu: {width, label}.</summary>
         private static readonly int[][] WidthPresets = new int[][]
@@ -3115,6 +3135,63 @@ namespace DynamicIsland
                     "Settings", Native.MB_ICONINFORMATION);
             }
         }
+
+        /// <summary>
+        /// Small modal dialog that asks for a number, used by the "Custom value..." items in
+        /// the tray menu so every setting can be typed instead of picked from presets.
+        /// </summary>
+        private bool PromptNumber(string title, string prompt, int current, out int value)
+        {
+            value = 0;
+            try
+            {
+                Form f = new Form();
+                f.Text = title;
+                f.FormBorderStyle = FormBorderStyle.FixedDialog;
+                f.MaximizeBox = false;
+                f.MinimizeBox = false;
+                f.ShowInTaskbar = false;
+                f.StartPosition = FormStartPosition.CenterScreen;
+                f.ClientSize = new Size(312, 128);
+
+                Label lbl = new Label();
+                lbl.Text = prompt;
+                lbl.Location = new Point(12, 10);
+                lbl.AutoSize = true;
+
+                TextBox tb = new TextBox();
+                tb.Text = current.ToString();
+                tb.Location = new Point(12, 38);
+                tb.Width = 288;
+
+                Button ok = new Button();
+                ok.Text = "OK";
+                ok.DialogResult = DialogResult.OK;
+                ok.Location = new Point(130, 80);
+                ok.Width = 80;
+
+                Button cancel = new Button();
+                cancel.Text = "Cancel";
+                cancel.DialogResult = DialogResult.Cancel;
+                cancel.Location = new Point(218, 80);
+                cancel.Width = 82;
+
+                f.Controls.Add(lbl);
+                f.Controls.Add(tb);
+                f.Controls.Add(ok);
+                f.Controls.Add(cancel);
+                f.AcceptButton = ok;
+                f.CancelButton = cancel;
+
+                if (f.ShowDialog() != DialogResult.OK) return false;
+                if (!int.TryParse(tb.Text.Trim(),
+                    System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out value)) return false;
+                return true;
+            }
+            catch { return false; }
+        }
+
         private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string AppName = "DynamicIsland";
 
@@ -3742,6 +3819,8 @@ namespace DynamicIsland
                     int flags = Native.MF_STRING | (island.OffsetX == offsetValues[i] ? Native.MF_CHECKED : 0);
                     Native.AppendMenu(posMenu, flags, IdOffsetBase + i, offsetLabels[i]);
                 }
+                Native.AppendMenu(posMenu, Native.MF_SEPARATOR, 0, null);
+                Native.AppendMenu(posMenu, Native.MF_STRING, IdOffsetCustom, "Custom value...");
                 Native.AppendMenu(menu, Native.MF_POPUP, (int)posMenu, "Position");
 
                 // ---- expanded width presets ----
@@ -3759,6 +3838,8 @@ namespace DynamicIsland
                     int flags = Native.MF_STRING | (island.OpenWidth == openValues[i] ? Native.MF_CHECKED : 0);
                     Native.AppendMenu(openMenu, flags, IdOpenBase + i, openLabels[i]);
                 }
+                Native.AppendMenu(openMenu, Native.MF_SEPARATOR, 0, null);
+                Native.AppendMenu(openMenu, Native.MF_STRING, IdOpenCustom, "Custom value...");
                 Native.AppendMenu(menu, Native.MF_POPUP, (int)openMenu, "Expanded width");
 
                 // ---- collapsed width presets ----
@@ -3770,6 +3851,8 @@ namespace DynamicIsland
                     int flags = Native.MF_STRING | (island.IdleWidth == w ? Native.MF_CHECKED : 0);
                     Native.AppendMenu(sizeMenu, flags, IdWidthBase + w, label);
                 }
+                Native.AppendMenu(sizeMenu, Native.MF_SEPARATOR, 0, null);
+                Native.AppendMenu(sizeMenu, Native.MF_STRING, IdWidthCustom, "Custom value...");
                 Native.AppendMenu(menu, Native.MF_POPUP, (int)sizeMenu, "Resting width");
                 Native.AppendMenu(menu, Native.MF_SEPARATOR, 0, null);
 
@@ -3804,7 +3887,40 @@ namespace DynamicIsland
                     case IdEditSettings:
                         OpenSettingsFile(); break;
                     default:
-                        if (cmd >= IdOffsetBase && cmd < IdOffsetBase + offsetValues.Length)
+                        if (cmd == IdOffsetCustom)
+                        {
+                            int v;
+                            if (PromptNumber("Position", "Horizontal offset along the top edge.\nNegative = left, positive = right.", settings.OffsetX, out v))
+                            {
+                                settings.OffsetX = Settings.ClampOffset(v);
+                                settings.Save();
+                                island.ApplySettings(settings);
+                                dirty = true;
+                            }
+                        }
+                        else if (cmd == IdOpenCustom)
+                        {
+                            int v;
+                            if (PromptNumber("Expanded width", "Width of the island when hovered, in pixels.\nUp to the full screen width (" + (int)Math.Round(island.ViewW) + ").", settings.OpenWidth, out v))
+                            {
+                                settings.OpenWidth = Settings.ClampOpen(v);
+                                settings.Save();
+                                island.ApplySettings(settings);
+                                dirty = true;
+                            }
+                        }
+                        else if (cmd == IdWidthCustom)
+                        {
+                            int v;
+                            if (PromptNumber("Resting width", "Width of the island at rest, in pixels (16-220).", settings.IdleWidth, out v))
+                            {
+                                settings.IdleWidth = Settings.Clamp(v);
+                                settings.Save();
+                                island.ApplySettings(settings);
+                                dirty = true;
+                            }
+                        }
+                        else if (cmd >= IdOffsetBase && cmd < IdOffsetBase + offsetValues.Length)
                         {
                             settings.OffsetX = offsetValues[cmd - IdOffsetBase];
                             settings.Save();
@@ -3879,15 +3995,21 @@ namespace DynamicIsland
             Rectangle b = Bounds;
             double s = scale;
             int pw = (int)Math.Round(island.Width * s);
-            int px = b.Left + (b.Width - pw) / 2 + (int)Math.Round(island.OffsetX * s);
+            int pillX = b.Left + (b.Width - pw) / 2 + (int)Math.Round(island.OffsetX * s);
             int py = b.Top + (int)Math.Round(Island.TopMarginPx * s);
+
+            // the interior content is centred and capped, exactly like DrawPanel:
+            // a shell stretched corner to corner still has a comfortable control area
+            int cw = Math.Min(pw, (int)Math.Round(Island.PanelMaxW * s));
+            int px = pillX + (pw - cw) / 2;
+
             double pad = 16 * s;
             int trackX = (int)(px + pad + 28 * s);
-            int trackW = (int)(pw - pad * 2 - 28 * s - 44 * s);
+            int trackW = (int)(cw - pad * 2 - 28 * s - 44 * s);
             boxVolume = new Rectangle(trackX, (int)(py + 127 * s), trackW, (int)(14 * s));
             boxBrightness = new Rectangle(trackX, (int)(py + 152 * s), trackW, (int)(14 * s));
             boxGlyph = new Rectangle((int)(px + pad - 3 * s), (int)(py + 123 * s), (int)(26 * s), (int)(26 * s));
-            boxToggle = new Rectangle(px, py, pw, (int)(44 * s));
+            boxToggle = new Rectangle(px, py, cw, (int)(44 * s));
         }
 
         public void ApplyCursor(IntPtr cursor)
@@ -4318,9 +4440,9 @@ namespace DynamicIsland
                                    "act-charge", "act-charge-badge", "act-charge-mic", "act-charge-device-mic",
                                    "band-charge", "band-mic", "band-charge-lang", "band-wifi",
                                    "band-download", "band-three", "flat-charge-mic", "flat-lang",
-                                   "flat-idle" };
+                                   "flat-idle", "expanded-wide" };
 
-                for (int mode = 0; mode < 41; mode++)
+                for (int mode = 0; mode < 42; mode++)
                 {
                     Island island = new Island(null);
                     island.ApplySettings(new Settings());     // default 62 px resting width
@@ -4428,6 +4550,16 @@ namespace DynamicIsland
                             island.PosePrivacy(false, true, "Discord");
                             PoseActivity(island, mgr, TimeSpan.Zero);
                             island.PoseFlat();
+                        }
+                        if (mode == 41)
+                        {
+                            // the shell stretched almost corner to corner, while the guts
+                            // stay at their comfortable width, centred inside
+                            island.ViewW = 1400;
+                            Settings wide = new Settings();
+                            wide.OpenWidth = 1400;
+                            island.ApplySettings(wide);
+                            island.Pose(true, false, 1.7);
                         }
                         if (mode == 19)
                         {
