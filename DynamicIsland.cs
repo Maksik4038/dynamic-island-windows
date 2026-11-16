@@ -3074,6 +3074,7 @@ namespace DynamicIsland
     {
         private const int IdExit = 1, IdCenter = 2, IdReset = 3, IdAutoStart = 4, IdAbout = 5;
         private const int IdWidthBase = 100, IdEditSettings = 6;
+        private const int IdOpenBase = 500, IdOffsetBase = 600;
 
         /// <summary>Resting-width presets offered in the tray menu: {width, label}.</summary>
         private static readonly int[][] WidthPresets = new int[][]
@@ -3725,9 +3726,40 @@ namespace DynamicIsland
             if (menu == IntPtr.Zero) return;
             try
             {
+                int vw = (int)Math.Round(island.ViewW);
+
+                // ---- position: horizontal offset along the top edge ----
+                int[] offsetValues = new int[] { 0,
+                    -(int)(vw * 0.12), -(int)(vw * 0.25), -(int)(vw * 0.40),
+                    (int)(vw * 0.12), (int)(vw * 0.25), (int)(vw * 0.40) };
+                string[] offsetLabels = new string[] { "Center",
+                    "Slightly left", "Left", "Far left",
+                    "Slightly right", "Right", "Far right" };
                 Native.AppendMenu(menu, Native.MF_STRING, IdCenter, "Center island");
-                Native.AppendMenu(menu, Native.MF_STRING, IdReset, "Move to default spot");
-                Native.AppendMenu(menu, Native.MF_SEPARATOR, 0, null);
+                IntPtr posMenu = Native.CreatePopupMenu();
+                for (int i = 0; i < offsetValues.Length; i++)
+                {
+                    int flags = Native.MF_STRING | (island.OffsetX == offsetValues[i] ? Native.MF_CHECKED : 0);
+                    Native.AppendMenu(posMenu, flags, IdOffsetBase + i, offsetLabels[i]);
+                }
+                Native.AppendMenu(menu, Native.MF_POPUP, (int)posMenu, "Position");
+
+                // ---- expanded width presets ----
+                int[] openValues = new int[] { 371, vw / 2, vw * 2 / 3, vw };
+                string[] openLabels = new string[]
+                {
+                    "Default (371 px)",
+                    "Half screen (" + (vw / 2) + " px)",
+                    "Two thirds (" + (vw * 2 / 3) + " px)",
+                    "Full screen (" + vw + " px)"
+                };
+                IntPtr openMenu = Native.CreatePopupMenu();
+                for (int i = 0; i < openValues.Length; i++)
+                {
+                    int flags = Native.MF_STRING | (island.OpenWidth == openValues[i] ? Native.MF_CHECKED : 0);
+                    Native.AppendMenu(openMenu, flags, IdOpenBase + i, openLabels[i]);
+                }
+                Native.AppendMenu(menu, Native.MF_POPUP, (int)openMenu, "Expanded width");
 
                 // ---- collapsed width presets ----
                 IntPtr sizeMenu = Native.CreatePopupMenu();
@@ -3772,8 +3804,21 @@ namespace DynamicIsland
                     case IdEditSettings:
                         OpenSettingsFile(); break;
                     default:
-                        // width preset ids
-                        if (cmd >= IdWidthBase && cmd <= IdWidthBase + Settings.MaxIdleWidth)
+                        if (cmd >= IdOffsetBase && cmd < IdOffsetBase + offsetValues.Length)
+                        {
+                            settings.OffsetX = offsetValues[cmd - IdOffsetBase];
+                            settings.Save();
+                            island.ApplySettings(settings);
+                            dirty = true;
+                        }
+                        else if (cmd >= IdOpenBase && cmd < IdOpenBase + openValues.Length)
+                        {
+                            settings.OpenWidth = openValues[cmd - IdOpenBase];
+                            settings.Save();
+                            island.ApplySettings(settings);
+                            dirty = true;
+                        }
+                        else if (cmd >= IdWidthBase && cmd <= IdWidthBase + Settings.MaxIdleWidth)
                         {
                             int w = cmd - IdWidthBase;
                             settings.IdleWidth = w;

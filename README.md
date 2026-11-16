@@ -65,8 +65,8 @@ More states are in [`shots/`](shots) — one PNG per state, rendered by the app 
 Resting width is configurable from a dot (16 px) up to 220 px; below capsule height the
 island becomes a true circle.
 
-Three values live in `settings.ini` next to the exe (edit it and restart, or use the tray
-menu → *Edit settings file*):
+Three values live in `settings.ini` next to the exe, and are also reachable from the tray
+menu: **Position** (horizontal offset), **Expanded width** and **Resting width**.
 
 | Key | Meaning | Default |
 |---|---|---|
