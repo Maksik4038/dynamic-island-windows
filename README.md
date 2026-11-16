@@ -275,8 +275,9 @@ powershell -ExecutionPolicy Bypass -File Build.ps1
 
 ## Status colours and fullscreen
 
-Instead of drawing a separate icon for every event, the island tints a thin strip along
-its top edge:
+In fullscreen the island shows nothing but a thin strip of colour along its top edge.
+The strip is split when several things happen at once, so the island reads as "part
+green, part orange":
 
 | Event | Colour |
 |---|---|
@@ -288,9 +289,8 @@ its top edge:
 | Download | cyan |
 | Device, notification, timer, alarm, app launch | purple |
 
-Several events at once are drawn side by side, so the island reads as "part green, part
-orange". This also means the microphone stays visible while charging, without either one
-hiding the other.
+The strips belong to the flat capsule only. At the normal size the island shows its real
+content - the player, a card, the charge percentage - and the strips stay out of the way.
 
 When a window fills the whole working area - a browser in F11, a game, a video player, or
 any window using the entire screen - the island collapses to a **flat capsule** at the very

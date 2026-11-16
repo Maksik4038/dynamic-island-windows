@@ -1048,6 +1048,8 @@ namespace DynamicIsland
 
         private bool wasCharging;
         private int lastPercent = -2;
+        private int chargeStreak;         // consecutive reads that saw charging
+        private int notChargeStreak;      // consecutive reads that saw no charging
         private System.Windows.Forms.Timer timer;
 
         public void Start()
@@ -1057,7 +1059,7 @@ namespace DynamicIsland
             lastPercent = p;
 
             timer = new System.Windows.Forms.Timer();
-            timer.Interval = 4000;
+            timer.Interval = 2500;
             timer.Tick += delegate { Poll(); };
             timer.Start();
         }
@@ -1069,15 +1071,29 @@ namespace DynamicIsland
                 int p;
                 bool charging = Read(out p);
 
-                if (charging != wasCharging)
+                if (charging) { chargeStreak++; notChargeStreak = 0; }
+                else { notChargeStreak++; chargeStreak = 0; }
+
+                // A desktop machine transiently flaps the AC/charging bits while the power
+                // state settles, which used to flash a one-second charging badge. The state
+                // must now hold for two consecutive polls before it is announced.
+                if (charging && !wasCharging && chargeStreak >= 2)
                 {
-                    wasCharging = charging;
+                    wasCharging = true;
                     lastPercent = p;
-                    Fire(charging ? p : -1);       // -1 means "stopped charging"
+                    Fire(p);
                     return;
                 }
+                if (!charging && wasCharging && notChargeStreak >= 2)
+                {
+                    wasCharging = false;
+                    lastPercent = -1;
+                    Fire(-1);                   // -1 means "stopped charging"
+                    return;
+                }
+
                 // while charging, keep the percentage fresh
-                if (charging && p != lastPercent)
+                if (wasCharging && p >= 0 && p != lastPercent)
                 {
                     lastPercent = p;
                     Fire(p);
@@ -1101,9 +1117,14 @@ namespace DynamicIsland
             percent = -1;
             SYSTEM_POWER_STATUS s;
             if (!GetSystemPowerStatus(out s)) return false;
-            if (s.BatteryFlag == BATTERY_FLAG_NO_BATTERY || s.BatteryFlag == 255) return false;
 
-            if (s.BatteryLifePercent != BATTERY_PERCENT_UNKNOWN) percent = s.BatteryLifePercent;
+            // No system battery (bitwise, not exact match) or an unknown percentage:
+            // there is nothing to report. A desktop transiently reports AC power with a
+            // flag that is not exactly 128, which used to flash a charging badge.
+            if ((s.BatteryFlag & BATTERY_FLAG_NO_BATTERY) != 0) return false;
+            if (s.BatteryLifePercent == BATTERY_PERCENT_UNKNOWN) return false;
+
+            percent = s.BatteryLifePercent;
 
             bool onAc = s.ACLineStatus == 1;
             bool chargingFlag = (s.BatteryFlag & 0x08) != 0;      // BATTERY_FLAG_CHARGING

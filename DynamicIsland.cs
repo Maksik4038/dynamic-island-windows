@@ -424,6 +424,17 @@ namespace DynamicIsland
         /// <summary>Critically damped spring: frame-rate independent, no overshoot.</summary>
         public static void Spring(ref double value, ref double velocity, double target, double dt, double freq)
         {
+            Spring(ref value, ref velocity, target, dt, freq, 1.0);
+        }
+
+        /// <summary>
+        /// Damped spring with an adjustable damping ratio. 1.0 is critically damped (no
+        /// overshoot). The pill geometry uses ~0.72 for the small, controlled bounce that
+        /// makes the island feel alive instead of robotic; the opacity springs stay
+        /// critically damped because overshoot there is invisible anyway.
+        /// </summary>
+        public static void Spring(ref double value, ref double velocity, double target, double dt, double freq, double damping)
+        {
             double w = 2 * Math.PI * freq;
             double steps = Math.Ceiling(dt / 0.002);
             if (steps < 1) steps = 1;
@@ -431,7 +442,7 @@ namespace DynamicIsland
             double h = dt / steps;
             for (int i = 0; i < (int)steps; i++)
             {
-                double a = -w * w * (value - target) - 2 * w * velocity;
+                double a = -w * w * (value - target) - 2 * damping * w * velocity;
                 velocity += a * h;
                 value += velocity * h;
             }
@@ -1368,8 +1379,8 @@ namespace DynamicIsland
                 }
                 else
                 {
-                    Anim.Spring(ref animW, ref velW, OpenW, dt, 4.4);
-                    Anim.Spring(ref animH, ref velH, OpenH, dt, 4.4);
+                    Anim.Spring(ref animW, ref velW, OpenW, dt, 4.4, 0.72);
+                    Anim.Spring(ref animH, ref velH, OpenH, dt, 4.4, 0.72);
                 }
             }
             else if (fullscreen)
@@ -1377,30 +1388,30 @@ namespace DynamicIsland
                 // Fullscreen overrides every other size rule: the capsule must stay flat.
                 // These branches each used to hardcode IdleH, and they were quietly winning
                 // over the flat target - the island ended up pinned to the top but tall.
-                Anim.Spring(ref animW, ref velW, idleW, dt, 4.4);
-                Anim.Spring(ref animH, ref velH, FlatH, dt, 4.4);
+                Anim.Spring(ref animW, ref velW, idleW, dt, 4.4, 0.72);
+                Anim.Spring(ref animH, ref velH, FlatH, dt, 4.4, 0.72);
             }
             else if (activityMode)
             {
                 // a running timer is just a glyph; a finished one unfurls downward
-                Anim.Spring(ref animW, ref velW, TargetWidth(shown), dt, 4.7);
-                Anim.Spring(ref animH, ref velH, TargetHeight(shown), dt, 4.7);
+                Anim.Spring(ref animW, ref velW, TargetWidth(shown), dt, 4.7, 0.72);
+                Anim.Spring(ref animH, ref velH, TargetHeight(shown), dt, 4.7, 0.72);
             }
             else if (micOnly)
             {
                 // the island KEEPS its resting width - only the icon and rim change
-                Anim.Spring(ref animW, ref velW, idleW, dt, 4.6);
-                Anim.Spring(ref animH, ref velH, IdleH, dt, 4.6);
+                Anim.Spring(ref animW, ref velW, idleW, dt, 4.6, 0.72);
+                Anim.Spring(ref animH, ref velH, IdleH, dt, 4.6, 0.72);
             }
             else if (mediaMode)
             {
-                Anim.Spring(ref animW, ref velW, MediaW, dt, 4.6);
-                Anim.Spring(ref animH, ref velH, IdleH, dt, 4.6);
+                Anim.Spring(ref animW, ref velW, MediaW, dt, 4.6, 0.72);
+                Anim.Spring(ref animH, ref velH, IdleH, dt, 4.6, 0.72);
             }
             else
             {
-                Anim.Spring(ref animW, ref velW, idleW, dt, 4.4);
-                Anim.Spring(ref animH, ref velH, IdleHeightFor(idleW), dt, 4.4);
+                Anim.Spring(ref animW, ref velW, idleW, dt, 4.4, 0.72);
+                Anim.Spring(ref animH, ref velH, IdleHeightFor(idleW), dt, 4.4, 0.72);
             }
             Anim.Spring(ref open, ref velOpen, (expanded && !(hudMode && drag == 0)) ? 1 : 0, dt, 5.0);
             Anim.Spring(ref hud, ref velHud, (hudMode && !expanded) || (hudMode && drag != 0) ? 1 : 0, dt, 5.2);
@@ -1540,8 +1551,10 @@ namespace DynamicIsland
 
             g.Restore(state);
 
-            // status colours along the top edge, over whatever the pill is showing
-            Guard("Bands", delegate { DrawBands(g, pill, scale, BandColors()); });
+            // The status colours belong to the flat fullscreen capsule only. In the normal
+            // island the real content (icon, player, card) already says what is happening,
+            // and the strips there just looked like stray highlights.
+            if (fullscreen) Guard("Bands", delegate { DrawBands(g, pill, scale, BandColors()); });
 
             // lock screen: a small padlock beside the island
             if (locked && !expanded) Guard("Lock", delegate { DrawLockGlyph(g, pill, scale); });
